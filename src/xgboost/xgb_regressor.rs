@@ -53,14 +53,28 @@ use crate::{
     rand_custom::get_rng_impl,
 };
 
+const LOG_LOSS_EPS: f64 = 1e-12;
+
+pub(crate) fn sigmoid(logit: f64) -> f64 {
+    if logit >= 0.0 {
+        let z = (-logit).exp();
+        1.0 / (1.0 + z)
+    } else {
+        let z = logit.exp();
+        z / (1.0 + z)
+    }
+}
+
 /// Defines the objective function to be optimized.
 /// The objective function provides the loss, gradient (first derivative), and
 /// hessian (second derivative) required for the XGBoost algorithm.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Objective {
     /// The objective for regression tasks using Mean Squared Error.
     /// Loss: 0.5 * (y_true - y_pred)^2
     MeanSquaredError,
+    /// Binary logistic loss for classification tasks.
+    BinaryLogistic,
 }
 
 impl Objective {
@@ -82,6 +96,17 @@ impl Objective {
                     .sum::<f64>()
                     / y_true.shape() as f64
             }
+            Objective::BinaryLogistic => {
+                zip(y_true.iterator(0), y_pred)
+                    .map(|(true_val, pred_val)| {
+                        let label = true_val.to_f64().unwrap();
+                        let prob = sigmoid(*pred_val);
+                        let prob = prob.clamp(LOG_LOSS_EPS, 1.0 - LOG_LOSS_EPS);
+                        -(label * prob.ln() + (1.0 - label) * (1.0 - prob).ln())
+                    })
+                    .sum::<f64>()
+                    / y_true.shape() as f64
+            }
         }
     }
 
@@ -98,6 +123,13 @@ impl Objective {
             Objective::MeanSquaredError => zip(y_true.iterator(0), y_pred)
                 .map(|(true_val, pred_val)| *pred_val - true_val.to_f64().unwrap())
                 .collect(),
+            Objective::BinaryLogistic => zip(y_true.iterator(0), y_pred)
+                .map(|(true_val, pred_val)| {
+                    let label = true_val.to_f64().unwrap();
+                    let prob = sigmoid(*pred_val);
+                    prob - label
+                })
+                .collect(),
         }
     }
 
@@ -113,6 +145,13 @@ impl Objective {
     pub fn hessian<TY: Number, Y: Array1<TY>>(&self, y_true: &Y, y_pred: &[f64]) -> Vec<f64> {
         match self {
             Objective::MeanSquaredError => vec![1.0; y_true.shape()],
+            Objective::BinaryLogistic => y_pred
+                .iter()
+                .map(|pred| {
+                    let prob = sigmoid(*pred);
+                    prob * (1.0 - prob)
+                })
+                .collect(),
         }
     }
 }
@@ -418,6 +457,14 @@ impl Default for XGRegressorParameters {
 
 // Builder pattern for XGRegressorParameters
 impl XGRegressorParameters {
+    /// Creates parameter set configured for binary classification using logistic loss.
+    pub fn for_binary_classification() -> Self {
+        let mut params = Self::default();
+        params.objective = Objective::BinaryLogistic;
+        params.base_score = 0.0;
+        params
+    }
+
     /// Sets the number of boosting rounds or trees to build.
     pub fn with_n_estimators(mut self, n_estimators: usize) -> Self {
         self.n_estimators = n_estimators;
@@ -641,6 +688,34 @@ mod tests {
         assert_eq!(gradients, vec![0.5, 0.5, -0.5]);
         // Hessians should be all 1.0 for MSE
         assert_eq!(hessians, vec![1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn test_binary_logistic_objective() {
+        let objective = Objective::BinaryLogistic;
+        let y_true = vec![0.0, 1.0];
+        let logits = vec![-2.0, 2.0];
+
+        let loss = objective.loss_function(&y_true, &logits);
+        assert!((loss - 0.126928011).abs() < 1e-6);
+
+        let gradients = objective.gradient(&y_true, &logits);
+        assert!((gradients[0] - 0.119202922).abs() < 1e-6);
+        assert!((gradients[1] + 0.119202922).abs() < 1e-6);
+
+        let hessians = objective.hessian(&y_true, &logits);
+        assert!((hessians[0] - 0.104993585).abs() < 1e-6);
+        assert!((hessians[1] - 0.104993585).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_for_binary_classification_builder() {
+        let params = XGRegressorParameters::for_binary_classification();
+        match params.objective {
+            Objective::BinaryLogistic => {}
+            _ => panic!("Expected BinaryLogistic objective"),
+        }
+        assert_eq!(params.base_score, 0.0);
     }
 
     #[test]

@@ -14,3 +14,6 @@
 // xgboost implementation
 pub mod xgb_regressor;
 pub use xgb_regressor::{XGRegressor, XGRegressorParameters};
+
+pub mod xgb_classifier;
+pub use xgb_classifier::{XGClassifier, XGClassifierParameters};
