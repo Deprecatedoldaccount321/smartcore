@@ -607,6 +607,7 @@ impl<TX: FloatNumber + PartialOrd, TY: Number + Ord, X: Array2<TX>, Y: Array1<TY
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Failed;
     use crate::linalg::basic::matrix::DenseMatrix;
     use crate::metrics::*;
 
@@ -638,7 +639,7 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn fit_predict() {
+    fn fit_predict() -> Result<(), Failed> {
         let x = DenseMatrix::from_2d_array(&[
             &[5.1, 3.5, 1.4, 0.2],
             &[4.9, 3.0, 1.4, 0.2],
@@ -680,7 +681,9 @@ mod tests {
         )
         .unwrap();
 
-        assert!(accuracy(&y, &classifier.predict(&x).unwrap()) >= 0.95);
+        let accuracy_score = accuracy(&y, &classifier.predict(&x).unwrap())?;
+        assert!(accuracy_score >= 0.95);
+        Ok(())
     }
 
     #[test]
@@ -712,7 +715,7 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn fit_predict_iris_oob() {
+    fn fit_predict_iris_oob() -> Result<(), Failed> {
         let x = DenseMatrix::from_2d_array(&[
             &[5.1, 3.5, 1.4, 0.2],
             &[4.9, 3.0, 1.4, 0.2],
@@ -754,10 +757,10 @@ mod tests {
         )
         .unwrap();
 
-        assert!(
-            accuracy(&y, &classifier.predict_oob(&x).unwrap())
-                < accuracy(&y, &classifier.predict(&x).unwrap())
-        );
+        let oob_accuracy = accuracy(&y, &classifier.predict_oob(&x).unwrap())?;
+        let full_accuracy = accuracy(&y, &classifier.predict(&x).unwrap())?;
+        assert!(oob_accuracy < full_accuracy);
+        Ok(())
     }
 
     #[cfg_attr(

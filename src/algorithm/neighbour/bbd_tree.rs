@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 
+use crate::error::{Failed, SmartCoreResult};
 use crate::linalg::basic::arrays::Array2;
 use crate::metrics::distance::euclidian::*;
 use crate::numbers::basenum::Number;
@@ -39,7 +40,7 @@ impl BBDTreeNode {
 }
 
 impl BBDTree {
-    pub fn new<T: Number, M: Array2<T>>(data: &M) -> BBDTree {
+    pub fn new<T: Number, M: Array2<T>>(data: &M) -> SmartCoreResult<BBDTree> {
         let nodes: Vec<BBDTreeNode> = Vec::new();
 
         let (n, _) = data.shape();
@@ -52,11 +53,11 @@ impl BBDTree {
             root: 0,
         };
 
-        let root = tree.build_node(data, 0, n);
+        let root = tree.build_node(data, 0, n)?;
 
         tree.root = root;
 
-        tree
+        Ok(tree)
     }
 
     pub(crate) fn clustering(
@@ -65,7 +66,7 @@ impl BBDTree {
         sums: &mut Vec<Vec<f64>>,
         counts: &mut Vec<usize>,
         membership: &mut Vec<usize>,
-    ) -> f64 {
+    ) -> SmartCoreResult<f64> {
         let k = centroids.len();
 
         counts.iter_mut().for_each(|v| *v = 0);
@@ -95,22 +96,24 @@ impl BBDTree {
         sums: &mut Vec<Vec<f64>>,
         counts: &mut Vec<usize>,
         membership: &mut Vec<usize>,
-    ) -> f64 {
+    ) -> SmartCoreResult<f64> {
         let d = centroids[0].len();
 
         let mut min_dist =
-            Euclidian::squared_distance(&self.nodes[node].center, &centroids[candidates[0]]);
+            Euclidian::squared_distance(&self.nodes[node].center, &centroids[candidates[0]])?;
         let mut closest = candidates[0];
         for i in 1..k {
             let dist =
-                Euclidian::squared_distance(&self.nodes[node].center, &centroids[candidates[i]]);
+                Euclidian::squared_distance(&self.nodes[node].center, &centroids[candidates[i]])?;
             if dist < min_dist {
                 min_dist = dist;
                 closest = candidates[i];
             }
         }
 
-        if self.nodes[node].lower.is_some() {
+        if let (Some(lower_idx), Some(upper_idx)) =
+            (self.nodes[node].lower, self.nodes[node].upper)
+        {
             let mut new_candidates = vec![0; k];
             let mut newk = 0;
 
@@ -128,23 +131,25 @@ impl BBDTree {
             }
 
             if newk > 1 {
-                return self.filter(
-                    self.nodes[node].lower.unwrap(),
+                let lower_cost = self.filter(
+                    lower_idx,
                     centroids,
                     &new_candidates,
                     newk,
                     sums,
                     counts,
                     membership,
-                ) + self.filter(
-                    self.nodes[node].upper.unwrap(),
+                )?;
+                let upper_cost = self.filter(
+                    upper_idx,
                     centroids,
                     &new_candidates,
                     newk,
                     sums,
                     counts,
                     membership,
-                );
+                )?;
+                return Ok(lower_cost + upper_cost);
             }
         }
 
@@ -159,7 +164,7 @@ impl BBDTree {
             membership[self.index[i]] = closest;
         }
 
-        BBDTree::node_cost(&self.nodes[node], &centroids[closest])
+        Ok(BBDTree::node_cost(&self.nodes[node], &centroids[closest]))
     }
 
     fn prune(
@@ -192,7 +197,12 @@ impl BBDTree {
         lhs >= 2f64 * rhs
     }
 
-    fn build_node<T: Number, M: Array2<T>>(&mut self, data: &M, begin: usize, end: usize) -> usize {
+    fn build_node<T: Number, M: Array2<T>>(
+        &mut self,
+        data: &M,
+        begin: usize,
+        end: usize,
+    ) -> SmartCoreResult<usize> {
         let (_, d) = data.shape();
 
         let mut node = BBDTreeNode::new(d);
@@ -204,13 +214,19 @@ impl BBDTree {
         let mut upper_bound = vec![0f64; d];
 
         for i in 0..d {
-            lower_bound[i] = data.get((self.index[begin], i)).to_f64().unwrap();
-            upper_bound[i] = data.get((self.index[begin], i)).to_f64().unwrap();
+            lower_bound[i] = data
+                .get((self.index[begin], i))
+                .to_f64()
+                .ok_or_else(|| Failed::invalid_state("Unable to convert feature to f64"))?;
+            upper_bound[i] = lower_bound[i];
         }
 
         for i in begin..end {
             for j in 0..d {
-                let c = data.get((self.index[i], j)).to_f64().unwrap();
+                let c = data
+                    .get((self.index[i], j))
+                    .to_f64()
+                    .ok_or_else(|| Failed::invalid_state("Unable to convert feature to f64"))?;
                 if lower_bound[j] > c {
                     lower_bound[j] = c;
                 }
@@ -235,7 +251,10 @@ impl BBDTree {
             node.lower = Option::None;
             node.upper = Option::None;
             for i in 0..d {
-                node.sum[i] = data.get((self.index[begin], i)).to_f64().unwrap();
+                node.sum[i] = data
+                    .get((self.index[begin], i))
+                    .to_f64()
+                    .ok_or_else(|| Failed::invalid_state("Unable to convert feature to f64"))?;
             }
 
             if end > begin + 1 {
@@ -246,7 +265,7 @@ impl BBDTree {
             }
 
             node.cost = 0f64;
-            return self.add_node(node);
+            return Ok(self.add_node(node));
         }
 
         let split_cutoff = node.center[split_index];
@@ -254,10 +273,16 @@ impl BBDTree {
         let mut i2 = end - 1;
         let mut size = 0;
         while i1 <= i2 {
-            let mut i1_good =
-                data.get((self.index[i1], split_index)).to_f64().unwrap() < split_cutoff;
-            let mut i2_good =
-                data.get((self.index[i2], split_index)).to_f64().unwrap() >= split_cutoff;
+            let mut i1_good = data
+                .get((self.index[i1], split_index))
+                .to_f64()
+                .ok_or_else(|| Failed::invalid_state("Unable to convert feature to f64"))?
+                < split_cutoff;
+            let mut i2_good = data
+                .get((self.index[i2], split_index))
+                .to_f64()
+                .ok_or_else(|| Failed::invalid_state("Unable to convert feature to f64"))?
+                >= split_cutoff;
 
             if !i1_good && !i2_good {
                 self.index.swap(i1, i2);
@@ -275,12 +300,13 @@ impl BBDTree {
             }
         }
 
-        node.lower = Option::Some(self.build_node(data, begin, begin + size));
-        node.upper = Option::Some(self.build_node(data, begin + size, end));
+        let lower_idx = self.build_node(data, begin, begin + size)?;
+        let upper_idx = self.build_node(data, begin + size, end)?;
+        node.lower = Some(lower_idx);
+        node.upper = Some(upper_idx);
 
         for i in 0..d {
-            node.sum[i] =
-                self.nodes[node.lower.unwrap()].sum[i] + self.nodes[node.upper.unwrap()].sum[i];
+            node.sum[i] = self.nodes[lower_idx].sum[i] + self.nodes[upper_idx].sum[i];
         }
 
         let mut mean = vec![0f64; d];
@@ -288,10 +314,10 @@ impl BBDTree {
             *mean_i = node.sum[i] / node.count as f64;
         }
 
-        node.cost = BBDTree::node_cost(&self.nodes[node.lower.unwrap()], &mean)
-            + BBDTree::node_cost(&self.nodes[node.upper.unwrap()], &mean);
+        node.cost = BBDTree::node_cost(&self.nodes[lower_idx], &mean)
+            + BBDTree::node_cost(&self.nodes[upper_idx], &mean);
 
-        self.add_node(node)
+        Ok(self.add_node(node))
     }
 
     fn node_cost(node: &BBDTreeNode, center: &[f64]) -> f64 {
@@ -321,7 +347,7 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn bbdtree_iris() {
+    fn bbdtree_iris() -> SmartCoreResult<()> {
         let data = DenseMatrix::from_2d_array(&[
             &[5.1, 3.5, 1.4, 0.2],
             &[4.9, 3.0, 1.4, 0.2],
@@ -346,7 +372,7 @@ mod tests {
         ])
         .unwrap();
 
-        let tree = BBDTree::new(&data);
+        let tree = BBDTree::new(&data)?;
 
         let centroids = vec![vec![4.86, 3.22, 1.61, 0.29], vec![6.23, 2.92, 4.48, 1.42]];
 
@@ -356,10 +382,11 @@ mod tests {
 
         let mut membership = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1];
 
-        let dist = tree.clustering(&centroids, &mut sums, &mut counts, &mut membership);
+        let dist = tree.clustering(&centroids, &mut sums, &mut counts, &mut membership)?;
         assert!((dist - 10.68).abs() < 1e-2);
         assert!((sums[0][0] - 48.6).abs() < 1e-2);
         assert!((sums[1][3] - 13.8).abs() < 1e-2);
         assert_eq!(membership[17], 1);
+        Ok(())
     }
 }

@@ -3,22 +3,26 @@
 //! see [KNN algorithms](../index.html)
 //! ```
 //! use smartcore::algorithm::neighbour::linear_search::*;
+//! use smartcore::error::SmartCoreResult;
 //! use smartcore::metrics::distance::Distance;
 //!
 //! #[derive(Clone)]
 //! struct SimpleDistance {} // Our distance function
 //!
 //! impl Distance<i32> for SimpleDistance {
-//!   fn distance(&self, a: &i32, b: &i32) -> f64 { // simple simmetrical scalar distance
-//!     (a - b).abs() as f64
+//!   fn distance(&self, a: &i32, b: &i32) -> SmartCoreResult<f64> { // simple symmetrical scalar distance
+//!     Ok((a - b).abs() as f64)
 //!   }
 //! }
 //!
 //! let data = vec![1, 2, 3, 4, 5, 6, 7, 8, 9]; // data points
 //!
-//! let knn = LinearKNNSearch::new(data, SimpleDistance {}).unwrap();
+//! # fn main() -> SmartCoreResult<()> {
+//! let knn = LinearKNNSearch::new(data, SimpleDistance {})?;
 //!
-//! knn.find(&5, 3); // find 3 knn points from 5
+//! knn.find(&5, 3)?; // find 3 knn points from 5
+//! # Ok(())
+//! # }
 //!
 //! ```
 
@@ -67,7 +71,7 @@ impl<T, D: Distance<T>> LinearKNNSearch<T, D> {
         }
 
         for i in 0..self.data.len() {
-            let d = self.distance.distance(from, &self.data[i]);
+            let d = self.distance.distance(from, &self.data[i])?;
             let datum = heap.peek_mut();
             if d < datum.distance {
                 datum.distance = d;
@@ -97,7 +101,7 @@ impl<T, D: Distance<T>> LinearKNNSearch<T, D> {
         let mut neighbors: Vec<(usize, f64, &T)> = Vec::new();
 
         for i in 0..self.data.len() {
-            let d = self.distance.distance(from, &self.data[i]);
+            let d = self.distance.distance(from, &self.data[i])?;
 
             if d <= radius {
                 neighbors.push((i, d, &self.data[i]));
@@ -132,14 +136,15 @@ impl Eq for KNNPoint {}
 mod tests {
     use super::*;
     use crate::metrics::distance::Distances;
+    use crate::error::SmartCoreResult;
 
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
     #[derive(Debug, Clone)]
     struct SimpleDistance {}
 
     impl Distance<i32> for SimpleDistance {
-        fn distance(&self, a: &i32, b: &i32) -> f64 {
-            (a - b).abs() as f64
+        fn distance(&self, a: &i32, b: &i32) -> SmartCoreResult<f64> {
+            Ok((a - b).abs() as f64)
         }
     }
 
@@ -148,14 +153,13 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn knn_find() {
+    fn knn_find() -> SmartCoreResult<()> {
         let data1 = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
-        let algorithm1 = LinearKNNSearch::new(data1, SimpleDistance {}).unwrap();
+        let algorithm1 = LinearKNNSearch::new(data1, SimpleDistance {})?;
 
         let mut found_idxs1: Vec<usize> = algorithm1
-            .find(&2, 3)
-            .unwrap()
+            .find(&2, 3)?
             .iter()
             .map(|v| v.0)
             .collect();
@@ -164,8 +168,7 @@ mod tests {
         assert_eq!(vec!(0, 1, 2), found_idxs1);
 
         let mut found_idxs1: Vec<i32> = algorithm1
-            .find_radius(&5, 3.0)
-            .unwrap()
+            .find_radius(&5, 3.0)?
             .iter()
             .map(|v| *v.2)
             .collect();
@@ -181,17 +184,17 @@ mod tests {
             vec![5., 5.],
         ];
 
-        let algorithm2 = LinearKNNSearch::new(data2, Distances::euclidian()).unwrap();
+        let algorithm2 = LinearKNNSearch::new(data2, Distances::euclidian())?;
 
         let mut found_idxs2: Vec<usize> = algorithm2
-            .find(&vec![3., 3.], 3)
-            .unwrap()
+            .find(&vec![3., 3.], 3)?
             .iter()
             .map(|v| v.0)
             .collect();
         found_idxs2.sort_unstable();
 
         assert_eq!(vec!(1, 2, 3), found_idxs2);
+        Ok(())
     }
     #[cfg_attr(
         all(target_arch = "wasm32", not(target_os = "wasi")),

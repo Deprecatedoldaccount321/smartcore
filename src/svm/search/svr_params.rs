@@ -266,28 +266,34 @@ mod tests {
         let sig = Kernels::sigmoid().with_gamma(0.3).with_coef0(0.1);
 
         assert_eq!(lin, Kernels::Linear);
-        match rbf {
-            Kernels::RBF { gamma } => assert_eq!(gamma, Some(0.2)),
-            _ => panic!("Not RBF"),
+        assert!(
+            matches!(rbf, Kernels::RBF { .. }),
+            "Expected RBF kernel variant"
+        );
+        if let Kernels::RBF { gamma } = rbf {
+            assert_eq!(gamma, Some(0.2));
         }
-        match poly {
-            Kernels::Polynomial {
-                degree,
-                gamma,
-                coef0,
-            } => {
-                assert_eq!(degree, Some(2.0));
-                assert_eq!(gamma, Some(1.0));
-                assert_eq!(coef0, Some(0.5));
-            }
-            _ => panic!("Not Polynomial"),
+        assert!(
+            matches!(poly, Kernels::Polynomial { .. }),
+            "Expected Polynomial kernel variant"
+        );
+        if let Kernels::Polynomial {
+            degree,
+            gamma,
+            coef0,
+        } = poly
+        {
+            assert_eq!(degree, Some(2.0));
+            assert_eq!(gamma, Some(1.0));
+            assert_eq!(coef0, Some(0.5));
         }
-        match sig {
-            Kernels::Sigmoid { gamma, coef0 } => {
-                assert_eq!(gamma, Some(0.3));
-                assert_eq!(coef0, Some(0.1));
-            }
-            _ => panic!("Not Sigmoid"),
+        assert!(
+            matches!(sig, Kernels::Sigmoid { .. }),
+            "Expected Sigmoid kernel variant"
+        );
+        if let Kernels::Sigmoid { gamma, coef0 } = sig {
+            assert_eq!(gamma, Some(0.3));
+            assert_eq!(coef0, Some(0.1));
         }
     }
 }

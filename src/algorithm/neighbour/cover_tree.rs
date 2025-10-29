@@ -4,22 +4,26 @@
 //!
 //! ```
 //! use smartcore::algorithm::neighbour::cover_tree::*;
+//! use smartcore::error::SmartCoreResult;
 //! use smartcore::metrics::distance::Distance;
 //!
 //! #[derive(Clone)]
 //! struct SimpleDistance {} // Our distance function
 //!
 //! impl Distance<i32> for SimpleDistance {
-//!   fn distance(&self, a: &i32, b: &i32) -> f64 { // simple simmetrical scalar distance
-//!     (a - b).abs() as f64
+//!   fn distance(&self, a: &i32, b: &i32) -> SmartCoreResult<f64> { // simple symmetrical scalar distance
+//!     Ok((a - b).abs() as f64)
 //!   }
 //! }
 //!
 //! let data = vec![1, 2, 3, 4, 5, 6, 7, 8, 9]; // data points
 //!
-//! let mut tree = CoverTree::new(data, SimpleDistance {}).unwrap();
+//! # fn main() -> SmartCoreResult<()> {
+//! let mut tree = CoverTree::new(data, SimpleDistance {})?;
 //!
-//! tree.find(&5, 3); // find 3 knn points from 5
+//! tree.find(&5, 3)?; // find 3 knn points from 5
+//! # Ok(())
+//! # }
 //!
 //! ```
 use std::fmt::Debug;
@@ -49,8 +53,9 @@ impl<T, D: Distance<T>> PartialEq for CoverTree<T, D> {
             return false;
         }
         for i in 0..self.data.len() {
-            if self.distance.distance(&self.data[i], &other.data[i]) != 0f64 {
-                return false;
+            match self.distance.distance(&self.data[i], &other.data[i]) {
+                Ok(value) if value == 0f64 => continue,
+                _ => return false,
             }
         }
         true
@@ -116,7 +121,7 @@ impl<T: Debug + PartialEq, D: Distance<T>> CoverTree<T, D> {
         }
 
         let e = self.get_data_value(self.root.idx);
-        let mut d = self.distance.distance(e, p);
+        let mut d = self.distance.distance(e, p)?;
 
         let mut current_cover_set: Vec<(f64, &Node)> = Vec::new();
         let mut zero_set: Vec<(f64, &Node)> = Vec::new();
@@ -141,7 +146,7 @@ impl<T: Debug + PartialEq, D: Distance<T>> CoverTree<T, D> {
                     if c == 0 {
                         d = par.0;
                     } else {
-                        d = self.distance.distance(self.get_data_value(child.idx), p);
+                        d = self.distance.distance(self.get_data_value(child.idx), p)?;
                     }
 
                     let upper_bound = if empty_heap {
@@ -202,7 +207,7 @@ impl<T: Debug + PartialEq, D: Distance<T>> CoverTree<T, D> {
         let mut zero_set: Vec<(f64, &Node)> = Vec::new();
 
         let e = self.get_data_value(self.root.idx);
-        let mut d = self.distance.distance(e, p);
+        let mut d = self.distance.distance(e, p)?;
         current_cover_set.push((d, &self.root));
 
         while !current_cover_set.is_empty() {
@@ -214,7 +219,7 @@ impl<T: Debug + PartialEq, D: Distance<T>> CoverTree<T, D> {
                     if c == 0 {
                         d = par.0;
                     } else {
-                        d = self.distance.distance(self.get_data_value(child.idx), p);
+                        d = self.distance.distance(self.get_data_value(child.idx), p)?;
                     }
 
                     if d <= radius + child.max_dist {
@@ -258,7 +263,7 @@ impl<T: Debug + PartialEq, D: Distance<T>> CoverTree<T, D> {
         let mut max_dist = -1f64;
 
         for i in 1..self.data.len() {
-            let dist = self.distance.distance(point, &self.data[i]);
+            let dist = self.distance.distance(point, &self.data[i])?;
             let set = DistanceSet {
                 idx: i,
                 dist: vec![dist],
@@ -281,7 +286,7 @@ impl<T: Debug + PartialEq, D: Distance<T>> CoverTree<T, D> {
             self.get_scale(max_dist),
             &mut point_set,
             &mut consumed_set,
-        );
+        )?;
 
         Ok(())
     }
@@ -293,9 +298,9 @@ impl<T: Debug + PartialEq, D: Distance<T>> CoverTree<T, D> {
         top_scale: i64,
         point_set: &mut Vec<DistanceSet>,
         consumed_set: &mut Vec<DistanceSet>,
-    ) -> Node {
+    ) -> Result<Node, Failed> {
         if point_set.is_empty() {
-            self.new_leaf(p)
+            Ok(self.new_leaf(p))
         } else {
             let max_dist = self.max(point_set);
             let scale_from_points = self.get_scale(max_dist);
@@ -314,22 +319,22 @@ impl<T: Debug + PartialEq, D: Distance<T>> CoverTree<T, D> {
                     children.push(leaf);
                     consumed_set.push(set);
                 }
-                Node {
+                Ok(Node {
                     idx: p,
                     max_dist: 0f64,
                     parent_dist: 0f64,
                     children,
                     _scale: 100,
-                }
+                })
             } else {
                 let mut far: Vec<DistanceSet> = Vec::new();
                 self.split(point_set, &mut far, max_scale);
 
-                let child = self.batch_insert(p, next_scale, top_scale, point_set, consumed_set);
+                let child = self.batch_insert(p, next_scale, top_scale, point_set, consumed_set)?;
 
                 if point_set.is_empty() {
                     point_set.append(&mut far);
-                    child
+                    Ok(child)
                 } else {
                     let mut children: Vec<Node> = vec![child];
                     let mut new_point_set: Vec<DistanceSet> = Vec::new();
@@ -345,13 +350,13 @@ impl<T: Debug + PartialEq, D: Distance<T>> CoverTree<T, D> {
                             &mut new_point_set,
                             self.get_data_value(set.idx),
                             max_scale,
-                        );
+                        )?;
                         self.dist_split(
                             &mut far,
                             &mut new_point_set,
                             self.get_data_value(set.idx),
                             max_scale,
-                        );
+                        )?;
 
                         let mut new_child = self.batch_insert(
                             set.idx,
@@ -359,7 +364,7 @@ impl<T: Debug + PartialEq, D: Distance<T>> CoverTree<T, D> {
                             top_scale,
                             &mut new_point_set,
                             &mut new_consumed_set,
-                        );
+                        )?;
                         new_child.parent_dist = new_dist;
 
                         consumed_set.push(set);
@@ -383,13 +388,13 @@ impl<T: Debug + PartialEq, D: Distance<T>> CoverTree<T, D> {
 
                     point_set.append(&mut far);
 
-                    Node {
+                    Ok(Node {
                         idx: p,
                         max_dist: self.max(consumed_set),
                         parent_dist: 0f64,
                         children,
                         _scale: (top_scale - max_scale),
-                    }
+                    })
                 }
             }
         }
@@ -420,13 +425,13 @@ impl<T: Debug + PartialEq, D: Distance<T>> CoverTree<T, D> {
         new_point_set: &mut Vec<DistanceSet>,
         new_point: &T,
         max_scale: i64,
-    ) {
+    ) -> Result<(), Failed> {
         let fmax = self.get_cover_radius(max_scale);
         let mut new_set: Vec<DistanceSet> = Vec::new();
         for mut n in point_set.drain(0..) {
             let new_dist = self
                 .distance
-                .distance(new_point, self.get_data_value(n.idx));
+                .distance(new_point, self.get_data_value(n.idx))?;
             if new_dist <= fmax {
                 n.dist.push(new_dist);
                 new_point_set.push(n);
@@ -436,6 +441,7 @@ impl<T: Debug + PartialEq, D: Distance<T>> CoverTree<T, D> {
         }
 
         point_set.append(&mut new_set);
+        Ok(())
     }
 
     fn get_cover_radius(&self, s: i64) -> f64 {

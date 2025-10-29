@@ -61,7 +61,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::algorithm::neighbour::bbd_tree::BBDTree;
 use crate::api::{Predictor, UnsupervisedEstimator};
-use crate::error::Failed;
+use crate::error::{Failed, SmartCoreResult};
 use crate::linalg::basic::arrays::{Array1, Array2};
 use crate::metrics::distance::euclidian::*;
 use crate::numbers::basenum::Number;
@@ -252,7 +252,7 @@ impl<TX: Number, TY: Number, X: Array2<TX>, Y: Array1<TY>> KMeans<TX, TY, X, Y> 
     /// * `data` - training instances to cluster
     /// * `parameters` - cluster parameters
     pub fn fit(data: &X, parameters: KMeansParameters) -> Result<KMeans<TX, TY, X, Y>, Failed> {
-        let bbd = BBDTree::new(data);
+        let bbd = BBDTree::new(data)?;
 
         if parameters.k < 2 {
             return Err(Failed::fit(&format!(
@@ -271,7 +271,7 @@ impl<TX: Number, TY: Number, X: Array2<TX>, Y: Array1<TY>> KMeans<TX, TY, X, Y> 
         let (n, d) = data.shape();
 
         let mut distortion = f64::MAX;
-        let mut y = KMeans::<TX, TY, X, Y>::kmeans_plus_plus(data, parameters.k, parameters.seed);
+        let mut y = KMeans::<TX, TY, X, Y>::kmeans_plus_plus(data, parameters.k, parameters.seed)?;
         let mut size = vec![0; parameters.k];
         let mut centroids = vec![vec![0f64; d]; parameters.k];
 
@@ -281,7 +281,10 @@ impl<TX: Number, TY: Number, X: Array2<TX>, Y: Array1<TY>> KMeans<TX, TY, X, Y> 
 
         for i in 0..n {
             for j in 0..d {
-                centroids[y[i]][j] += data.get((i, j)).to_f64().unwrap();
+                centroids[y[i]][j] += data
+                    .get((i, j))
+                    .to_f64()
+                    .ok_or_else(|| Failed::invalid_state("Unable to convert feature to f64"))?;
             }
         }
 
@@ -293,7 +296,7 @@ impl<TX: Number, TY: Number, X: Array2<TX>, Y: Array1<TY>> KMeans<TX, TY, X, Y> 
 
         let mut sums = vec![vec![0f64; d]; parameters.k];
         for _ in 1..=parameters.max_iter {
-            let dist = bbd.clustering(&centroids, &mut sums, &mut size, &mut y);
+            let dist = bbd.clustering(&centroids, &mut sums, &mut size, &mut y)?;
             for i in 0..parameters.k {
                 if size[i] > 0 {
                     for j in 0..d {
@@ -334,24 +337,38 @@ impl<TX: Number, TY: Number, X: Array2<TX>, Y: Array1<TY>> KMeans<TX, TY, X, Y> 
             let mut min_dist = f64::MAX;
             let mut best_cluster = 0;
 
+            let row_view = x.get_row(i);
+            let mut src_iter = row_view.iterator(0);
+            for slot in row.iter_mut() {
+                let value = src_iter
+                    .next()
+                    .ok_or_else(|| Failed::invalid_state("Row length mismatch during prediction"))?;
+                *slot = value
+                    .to_f64()
+                    .ok_or_else(|| Failed::invalid_state("Unable to convert feature to f64"))?;
+            }
+            if src_iter.next().is_some() {
+                return Err(Failed::invalid_state(
+                    "Row length mismatch during prediction",
+                ));
+            }
+
             for j in 0..self.k {
-                x.get_row(i)
-                    .iterator(0)
-                    .zip(row.iter_mut())
-                    .for_each(|(&x, r)| *r = x.to_f64().unwrap());
-                let dist = Euclidian::squared_distance(&row, &self.centroids[j]);
+                let dist = Euclidian::squared_distance(&row, &self.centroids[j])?;
                 if dist < min_dist {
                     min_dist = dist;
                     best_cluster = j;
                 }
             }
-            result.set(i, TY::from_usize(best_cluster).unwrap());
+            let cluster_value = TY::from_usize(best_cluster)
+                .ok_or_else(|| Failed::invalid_state("Unable to represent cluster index"))?;
+            result.set(i, cluster_value);
         }
 
         Ok(result)
     }
 
-    fn kmeans_plus_plus(data: &X, k: usize, seed: Option<u64>) -> Vec<usize> {
+    fn kmeans_plus_plus(data: &X, k: usize, seed: Option<u64>) -> SmartCoreResult<Vec<usize>> {
         let mut rng = get_rng_impl(seed);
         let (n, _) = data.shape();
         let mut y = vec![0; n];
@@ -370,7 +387,7 @@ impl<TX: Number, TY: Number, X: Array2<TX>, Y: Array1<TY>> KMeans<TX, TY, X, Y> 
                     .iterator(0)
                     .zip(row.iter_mut())
                     .for_each(|(&x, r)| *r = x);
-                let dist = Euclidian::squared_distance(&row, &centroid);
+                let dist = Euclidian::squared_distance(&row, &centroid)?;
 
                 if dist < d[i] {
                     d[i] = dist;
@@ -401,7 +418,7 @@ impl<TX: Number, TY: Number, X: Array2<TX>, Y: Array1<TY>> KMeans<TX, TY, X, Y> 
                 .iterator(0)
                 .zip(row.iter_mut())
                 .for_each(|(&x, r)| *r = x);
-            let dist = Euclidian::squared_distance(&row, &centroid);
+            let dist = Euclidian::squared_distance(&row, &centroid)?;
 
             if dist < d[i] {
                 d[i] = dist;
@@ -409,7 +426,7 @@ impl<TX: Number, TY: Number, X: Array2<TX>, Y: Array1<TY>> KMeans<TX, TY, X, Y> 
             }
         }
 
-        y
+        Ok(y)
     }
 }
 

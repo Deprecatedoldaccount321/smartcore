@@ -566,6 +566,7 @@ impl<TX: Number + FloatNumber + RealNumber, TY: Number + Ord, X: Array2<TX>, Y: 
 mod tests {
     use super::*;
 
+    use crate::error::Failed;
     #[cfg(feature = "datasets")]
     use crate::dataset::generator::make_blobs;
     use crate::linalg::basic::arrays::Array;
@@ -759,8 +760,8 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn lr_fit_predict_multiclass() {
-        let blobs = make_blobs(15, 4, 3);
+    fn lr_fit_predict_multiclass() -> Result<(), Failed> {
+        let blobs = make_blobs(15, 4, 3)?;
 
         let x: DenseMatrix<f32> = DenseMatrix::from_iterator(blobs.data.into_iter(), 15, 4, 0);
         let y: Vec<i32> = blobs.target.into_iter().map(|v| v as i32).collect();
@@ -782,6 +783,7 @@ mod tests {
         let coeff: f32 = lr.coefficients().abs().iter().sum();
 
         assert!(reg_coeff_sum < coeff);
+        Ok(())
     }
 
     #[cfg(feature = "datasets")]
@@ -790,8 +792,8 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn lr_fit_predict_binary() {
-        let blobs = make_blobs(20, 4, 2);
+    fn lr_fit_predict_binary() -> Result<(), Failed> {
+        let blobs = make_blobs(20, 4, 2)?;
 
         let x = DenseMatrix::from_iterator(blobs.data.into_iter(), 20, 4, 0);
         let y: Vec<i32> = blobs.target.into_iter().map(|v| v as i32).collect();
@@ -816,6 +818,7 @@ mod tests {
         let coeff: f32 = lr.coefficients().abs().iter().sum();
 
         assert!(reg_coeff_sum < coeff);
+        Ok(())
     }
 
     //TODO: serialization for the new DenseMatrix needs to be implemented

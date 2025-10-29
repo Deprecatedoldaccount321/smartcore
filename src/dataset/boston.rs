@@ -26,16 +26,17 @@
 //!
 use crate::dataset::deserialize_data;
 use crate::dataset::Dataset;
+use crate::error::{Failed, SmartCoreResult};
 
 /// Get dataset
-pub fn load_dataset() -> Dataset<f32, f32> {
-    let (x, y, num_samples, num_features) = match deserialize_data(std::include_bytes!("boston.xy"))
-    {
-        Err(why) => panic!("Can't deserialize boston.xy. {why}"),
-        Ok((x, y, num_samples, num_features)) => (x, y, num_samples, num_features),
-    };
+pub fn load_dataset() -> SmartCoreResult<Dataset<f32, f32>> {
+    let (x, y, num_samples, num_features) =
+        deserialize_data(std::include_bytes!("boston.xy")).map_err(|why| {
+            let msg = format!("Can't deserialize boston.xy. {why}");
+            Failed::invalid_state(&msg)
+        })?;
 
-    Dataset {
+    Ok(Dataset {
         data: x,
         target: y,
         num_samples,
@@ -50,7 +51,7 @@ pub fn load_dataset() -> Dataset<f32, f32> {
         target_names: vec!["price".to_string()],
         description: "The Boston house-price data: http://lib.stat.cmu.edu/datasets/boston"
             .to_string(),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -59,14 +60,17 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     use super::super::*;
     use super::*;
+    use crate::error::Failed;
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     #[ignore]
-    fn refresh_boston_dataset() {
+    fn refresh_boston_dataset() -> Result<(), Failed> {
         // run this test to generate boston.xy file.
-        let dataset = load_dataset();
-        assert!(serialize_data(&dataset, "boston.xy").is_ok());
+        let dataset = load_dataset()?;
+        serialize_data(&dataset, "boston.xy")
+            .map_err(|err| Failed::invalid_state(&format!("Failed to serialize boston: {err}")))?;
+        Ok(())
     }
 
     #[cfg_attr(
@@ -74,8 +78,8 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn boston_dataset() {
-        let dataset = load_dataset();
+    fn boston_dataset() -> Result<(), Failed> {
+        let dataset = load_dataset()?;
         assert_eq!(
             dataset.data.len(),
             dataset.num_features * dataset.num_samples
@@ -83,5 +87,6 @@ mod tests {
         assert_eq!(dataset.target.len(), dataset.num_samples);
         assert_eq!(dataset.num_features, 13);
         assert_eq!(dataset.num_samples, 506);
+        Ok(())
     }
 }

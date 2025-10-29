@@ -9,12 +9,16 @@
 //! Example:
 //!
 //! ```
+//! use smartcore::error::SmartCoreResult;
 //! use smartcore::metrics::mean_absolute_error::MeanAbsoluteError;
 //! use smartcore::metrics::Metrics;
 //! let y_pred: Vec<f64> = vec![3., -0.5, 2., 7.];
 //! let y_true: Vec<f64> = vec![2.5, 0.0, 2., 8.];
 //!
-//! let mse: f64 = MeanAbsoluteError::new().get_score( &y_true, &y_pred);
+//! # fn main() -> SmartCoreResult<()> {
+//! let mse: f64 = MeanAbsoluteError::new().get_score(&y_true, &y_pred)?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
@@ -24,6 +28,7 @@ use std::marker::PhantomData;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+use crate::error::{Failed, SmartCoreResult};
 use crate::linalg::basic::arrays::ArrayView1;
 use crate::numbers::basenum::Number;
 
@@ -51,29 +56,50 @@ impl<T: Number> Metrics<T> for R2<T> {
     /// Computes R2 score
     /// * `y_true` - Ground truth (correct) target values.
     /// * `y_pred` - Estimated target values.
-    fn get_score(&self, y_true: &dyn ArrayView1<T>, y_pred: &dyn ArrayView1<T>) -> f64 {
+    fn get_score(
+        &self,
+        y_true: &dyn ArrayView1<T>,
+        y_pred: &dyn ArrayView1<T>,
+    ) -> SmartCoreResult<f64> {
         if y_true.shape() != y_pred.shape() {
-            panic!(
-                "The vector sizes don't match: {} != {}",
-                y_true.shape(),
-                y_pred.shape()
-            );
+            return Err(Failed::input(
+                "R2 score requires y_true and y_pred to have the same length",
+            ));
         }
 
         let n = y_true.shape();
+        if n == 0 {
+            return Err(Failed::input(
+                "R2 score requires at least one observation to evaluate",
+            ));
+        }
 
         let mean: f64 = y_true.mean_by();
+        let mean_t = T::from(mean).ok_or_else(|| {
+            Failed::invalid_state("R2 score could not convert the mean value to the target type")
+        })?;
         let mut ss_tot = T::zero();
         let mut ss_res = T::zero();
 
         for i in 0..n {
             let y_i = *y_true.get(i);
             let f_i = *y_pred.get(i);
-            ss_tot += (y_i - T::from(mean).unwrap()) * (y_i - T::from(mean).unwrap());
-            ss_res += (y_i - f_i) * (y_i - f_i);
+            let diff = y_i - mean_t;
+            ss_tot += diff * diff;
+            let res = y_i - f_i;
+            ss_res += res * res;
         }
 
-        (T::one() - ss_res / ss_tot).to_f64().unwrap()
+        if ss_tot == T::zero() {
+            return Err(Failed::input(
+                "R2 score is undefined because y_true has zero variance",
+            ));
+        }
+
+        let score = (T::one() - ss_res / ss_tot)
+            .to_f64()
+            .ok_or_else(|| Failed::invalid_state("R2 score could not convert result to f64"))?;
+        Ok(score)
     }
 }
 
@@ -86,14 +112,15 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn r2() {
+    fn r2() -> Result<(), Failed> {
         let y_true: Vec<f64> = vec![3., -0.5, 2., 7.];
         let y_pred: Vec<f64> = vec![2.5, 0.0, 2., 8.];
 
-        let score1: f64 = R2::new().get_score(&y_true, &y_pred);
-        let score2: f64 = R2::new().get_score(&y_true, &y_true);
+        let score1: f64 = R2::new().get_score(&y_true, &y_pred)?;
+        let score2: f64 = R2::new().get_score(&y_true, &y_true)?;
 
         assert!((score1 - 0.948608137).abs() < 1e-8);
         assert!((score2 - 1.0).abs() < 1e-8);
+        Ok(())
     }
 }

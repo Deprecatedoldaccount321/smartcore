@@ -14,6 +14,7 @@
 //! Example:
 //!
 //! ```
+//! use smartcore::error::SmartCoreResult;
 //! use smartcore::linalg::basic::matrix::DenseMatrix;
 //! use smartcore::linalg::basic::arrays::ArrayView2;
 //! use smartcore::metrics::distance::Distance;
@@ -30,9 +31,11 @@
 //! let a = data.mean_by(0);
 //! let b = vec![66., 640., 44.];
 //!
-//! let mahalanobis = Mahalanobis::new(&data);
-//!
-//! mahalanobis.distance(&a, &b);
+//! # fn main() -> SmartCoreResult<()> {
+//! let mahalanobis = Mahalanobis::new(&data)?;
+//! let distance = mahalanobis.distance(&a, &b)?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! ## References
@@ -48,6 +51,7 @@ use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
 use super::Distance;
+use crate::error::{Failed, SmartCoreResult};
 use crate::linalg::basic::arrays::{Array, Array2, ArrayView1};
 use crate::linalg::basic::matrix::DenseMatrix;
 use crate::linalg::traits::lu::LUDecomposable;
@@ -67,50 +71,52 @@ pub struct Mahalanobis<T: Number, M: Array2<f64>> {
 impl<T: Number, M: Array2<f64> + LUDecomposable<f64>> Mahalanobis<T, M> {
     /// Constructs new instance of `Mahalanobis` from given dataset
     /// * `data` - a matrix of _NxM_ where _N_ is number of observations and _M_ is number of attributes
-    pub fn new<X: Array2<T>>(data: &X) -> Mahalanobis<T, M> {
+    pub fn new<X: Array2<T>>(data: &X) -> SmartCoreResult<Mahalanobis<T, M>> {
         let (_, m) = data.shape();
         let mut sigma = M::zeros(m, m);
         data.cov(&mut sigma);
-        let sigmaInv = sigma.lu().and_then(|lu| lu.inverse()).unwrap();
-        Mahalanobis {
+        let sigmaInv = sigma
+            .lu()
+            .and_then(|lu| lu.inverse())?;
+        Ok(Mahalanobis {
             sigma,
             sigmaInv,
             _t: PhantomData,
-        }
+        })
     }
 
     /// Constructs new instance of `Mahalanobis` from given covariance matrix
     /// * `cov` - a covariance matrix
-    pub fn new_from_covariance<X: Array2<f64> + LUDecomposable<f64>>(cov: &X) -> Mahalanobis<T, X> {
+    pub fn new_from_covariance<X: Array2<f64> + LUDecomposable<f64>>(
+        cov: &X,
+    ) -> SmartCoreResult<Mahalanobis<T, X>> {
         let sigma = cov.clone();
-        let sigmaInv = sigma.lu().and_then(|lu| lu.inverse()).unwrap();
-        Mahalanobis {
+        let sigmaInv = sigma
+            .lu()
+            .and_then(|lu| lu.inverse())?;
+        Ok(Mahalanobis {
             sigma,
             sigmaInv,
             _t: PhantomData,
-        }
+        })
     }
 }
 
 impl<T: Number, A: ArrayView1<T>> Distance<A> for Mahalanobis<T, DenseMatrix<f64>> {
-    fn distance(&self, x: &A, y: &A) -> f64 {
+    fn distance(&self, x: &A, y: &A) -> SmartCoreResult<f64> {
         let (nrows, ncols) = self.sigma.shape();
         if x.shape() != nrows {
-            panic!(
+            return Err(Failed::input(&format!(
                 "Array x[{}] has different dimension with Sigma[{}][{}].",
-                x.shape(),
-                nrows,
-                ncols
-            );
+                x.shape(), nrows, ncols
+            )));
         }
 
         if y.shape() != nrows {
-            panic!(
+            return Err(Failed::input(&format!(
                 "Array y[{}] has different dimension with Sigma[{}][{}].",
-                y.shape(),
-                nrows,
-                ncols
-            );
+                y.shape(), nrows, ncols
+            )));
         }
 
         let n = x.shape();
@@ -118,8 +124,12 @@ impl<T: Number, A: ArrayView1<T>> Distance<A> for Mahalanobis<T, DenseMatrix<f64
         let z: Vec<f64> = x
             .iterator(0)
             .zip(y.iterator(0))
-            .map(|(&a, &b)| (a - b).to_f64().unwrap())
-            .collect();
+            .map(|(&a, &b)| {
+                (a - b)
+                    .to_f64()
+                    .ok_or_else(|| Failed::invalid_state("Unable to convert Mahalanobis delta to f64"))
+            })
+            .collect::<Result<Vec<f64>, Failed>>()?;
 
         // np.dot(np.dot((a-b),VI),(a-b).T)
         let mut s = 0f64;
@@ -129,7 +139,7 @@ impl<T: Number, A: ArrayView1<T>> Distance<A> for Mahalanobis<T, DenseMatrix<f64
             }
         }
 
-        s.sqrt()
+        Ok(s.sqrt())
     }
 }
 
@@ -138,13 +148,14 @@ mod tests {
     use super::*;
     use crate::linalg::basic::arrays::ArrayView2;
     use crate::linalg::basic::matrix::DenseMatrix;
+    use crate::error::SmartCoreResult;
 
     #[cfg_attr(
         all(target_arch = "wasm32", not(target_os = "wasi")),
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn mahalanobis_distance() {
+    fn mahalanobis_distance() -> SmartCoreResult<()> {
         let data = DenseMatrix::from_2d_array(&[
             &[64., 580., 29.],
             &[66., 570., 33.],
@@ -157,10 +168,11 @@ mod tests {
         let a = data.mean_by(0);
         let b = vec![66., 640., 44.];
 
-        let mahalanobis = Mahalanobis::new(&data);
+        let mahalanobis = Mahalanobis::new(&data)?;
 
-        let md: f64 = mahalanobis.distance(&a, &b);
+        let md: f64 = mahalanobis.distance(&a, &b)?;
 
         assert!((md - 5.33).abs() < 1e-2);
+        Ok(())
     }
 }

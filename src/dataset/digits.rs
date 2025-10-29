@@ -11,16 +11,17 @@
 //!
 use crate::dataset::deserialize_data;
 use crate::dataset::Dataset;
+use crate::error::{Failed, SmartCoreResult};
 
 /// Get dataset
-pub fn load_dataset() -> Dataset<f32, f32> {
-    let (x, y, num_samples, num_features) = match deserialize_data(std::include_bytes!("digits.xy"))
-    {
-        Err(why) => panic!("Can't deserialize digits.xy. {why}"),
-        Ok((x, y, num_samples, num_features)) => (x, y, num_samples, num_features),
-    };
+pub fn load_dataset() -> SmartCoreResult<Dataset<f32, f32>> {
+    let (x, y, num_samples, num_features) =
+        deserialize_data(std::include_bytes!("digits.xy")).map_err(|why| {
+            let msg = format!("Can't deserialize digits.xy. {why}");
+            Failed::invalid_state(&msg)
+        })?;
 
-    Dataset {
+    Ok(Dataset {
         data: x,
         target: y,
         num_samples,
@@ -37,7 +38,7 @@ pub fn load_dataset() -> Dataset<f32, f32> {
             .map(|s| s.to_string())
             .collect(),
         description: "Digits dataset: https://archive.ics.uci.edu/ml/datasets/Optical+Recognition+of+Handwritten+Digits".to_string(),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -46,25 +47,29 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     use super::super::*;
     use super::*;
+    use crate::error::Failed;
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     #[ignore]
-    fn refresh_digits_dataset() {
+    fn refresh_digits_dataset() -> Result<(), Failed> {
         // run this test to generate digits.xy file.
-        let dataset = load_dataset();
-        assert!(serialize_data(&dataset, "digits.xy").is_ok());
+        let dataset = load_dataset()?;
+        serialize_data(&dataset, "digits.xy")
+            .map_err(|err| Failed::invalid_state(&format!("Failed to serialize digits: {err}")))?;
+        Ok(())
     }
     #[cfg_attr(
         all(target_arch = "wasm32", not(target_os = "wasi")),
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn digits_dataset() {
-        let dataset = load_dataset();
+    fn digits_dataset() -> Result<(), Failed> {
+        let dataset = load_dataset()?;
         assert_eq!(dataset.data.len(), 1797 * 64);
         assert_eq!(dataset.target.len(), 1797);
         assert_eq!(dataset.num_features, 64);
         assert_eq!(dataset.num_samples, 1797);
+        Ok(())
     }
 }

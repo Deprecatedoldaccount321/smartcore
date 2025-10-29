@@ -1190,6 +1190,7 @@ mod tests {
     use num::ToPrimitive;
 
     use super::*;
+    use crate::error::Failed;
     use crate::linalg::basic::matrix::DenseMatrix;
     use crate::metrics::accuracy;
     use crate::svm::Kernels;
@@ -1199,7 +1200,7 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn svc_fit_predict() {
+    fn svc_fit_predict() -> Result<(), Failed> {
         let x = DenseMatrix::from_2d_array(&[
             &[5.1, 3.5, 1.4, 0.2],
             &[4.9, 3.0, 1.4, 0.2],
@@ -1234,12 +1235,12 @@ mod tests {
             .with_kernel(knl)
             .with_seed(Some(100));
 
-        let y_hat = SVC::fit(&x, &y, &parameters)
-            .and_then(|lr| lr.predict(&x))
-            .unwrap();
-        let acc = accuracy(&y, &(y_hat.iter().map(|e| e.to_i32().unwrap()).collect()));
+        let y_hat = SVC::fit(&x, &y, &parameters)?.predict(&x)?;
+        let predicted: Vec<i32> = y_hat.iter().map(|e| e.to_i32().unwrap()).collect();
+        let acc = accuracy(&y, &predicted)?;
 
         assert!(acc >= 0.9, "accuracy ({acc}) is not larger or equal to 0.9");
+        Ok(())
     }
 
     #[cfg_attr(
@@ -1290,7 +1291,7 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn svc_fit_predict_rbf() {
+    fn svc_fit_predict_rbf() -> Result<(), Failed> {
         let x = DenseMatrix::from_2d_array(&[
             &[5.1, 3.5, 1.4, 0.2],
             &[4.9, 3.0, 1.4, 0.2],
@@ -1325,13 +1326,14 @@ mod tests {
             &SVCParameters::default()
                 .with_c(1.0)
                 .with_kernel(Kernels::rbf().with_gamma(0.7)),
-        )
-        .and_then(|lr| lr.predict(&x))
-        .unwrap();
+        )?
+        .predict(&x)?;
 
-        let acc = accuracy(&y, &(y_hat.iter().map(|e| e.to_i32().unwrap()).collect()));
+        let predicted: Vec<i32> = y_hat.iter().map(|e| e.to_i32().unwrap()).collect();
+        let acc = accuracy(&y, &predicted)?;
 
         assert!(acc >= 0.9, "accuracy ({acc}) is not larger or equal to 0.9");
+        Ok(())
     }
 
     #[cfg_attr(
@@ -1339,7 +1341,7 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn svc_multiclass_fit_predict() {
+    fn svc_multiclass_fit_predict() -> Result<(), Failed> {
         let x = DenseMatrix::from_2d_array(&[
             &[5.1, 3.5, 1.4, 0.2],
             &[4.9, 3.0, 1.4, 0.2],
@@ -1372,16 +1374,16 @@ mod tests {
             .with_kernel(knl)
             .with_seed(Some(100));
 
-        let y_hat = MultiClassSVC::fit(&x, &y, &parameters)
-            .and_then(|lr| lr.predict(&x))
-            .unwrap();
+        let y_hat = MultiClassSVC::fit(&x, &y, &parameters)?.predict(&x)?;
 
-        let acc = accuracy(&y, &(y_hat.iter().map(|e| e.to_i32().unwrap()).collect()));
+        let predicted: Vec<i32> = y_hat.iter().map(|e| e.to_i32().unwrap()).collect();
+        let acc = accuracy(&y, &predicted)?;
 
         assert!(
             acc >= 0.9,
             "Multiclass accuracy ({acc}) is not larger or equal to 0.9"
         );
+        Ok(())
     }
 
     #[cfg_attr(

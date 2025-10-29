@@ -414,6 +414,7 @@ impl<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Failed;
     use crate::linalg::basic::matrix::DenseMatrix;
     use crate::metrics::mean_absolute_error;
 
@@ -437,7 +438,7 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn ridge_fit_predict() {
+    fn ridge_fit_predict() -> Result<(), Failed> {
         let x = DenseMatrix::from_2d_array(&[
             &[234.289, 235.6, 159.0, 107.608, 1947., 60.323],
             &[259.426, 232.5, 145.6, 108.632, 1948., 61.122],
@@ -475,7 +476,7 @@ mod tests {
         .and_then(|lr| lr.predict(&x))
         .unwrap();
 
-        assert!(mean_absolute_error(&y_hat_cholesky, &y) < 2.0);
+        assert!(mean_absolute_error(&y_hat_cholesky, &y)? < 2.0);
 
         let y_hat_svd = RidgeRegression::fit(
             &x,
@@ -489,7 +490,8 @@ mod tests {
         .and_then(|lr| lr.predict(&x))
         .unwrap();
 
-        assert!(mean_absolute_error(&y_hat_svd, &y) < 2.0);
+        assert!(mean_absolute_error(&y_hat_svd, &y)? < 2.0);
+        Ok(())
     }
 
     // TODO: implement serialization for new DenseMatrix

@@ -7,21 +7,29 @@
 //! Example:
 //!
 //! ```
+//! use smartcore::error::SmartCoreResult;
 //! use smartcore::metrics::accuracy::Accuracy;
 //! use smartcore::metrics::Metrics;
 //! let y_pred: Vec<f64> = vec![0., 2., 1., 3.];
 //! let y_true: Vec<f64> = vec![0., 1., 2., 3.];
 //!
-//! let score: f64 = Accuracy::new().get_score( &y_true, &y_pred);
+//! # fn main() -> SmartCoreResult<()> {
+//! let score: f64 = Accuracy::new().get_score(&y_true, &y_pred)?;
+//! # Ok(())
+//! # }
 //! ```
 //! With integers:
 //! ```
+//! use smartcore::error::SmartCoreResult;
 //! use smartcore::metrics::accuracy::Accuracy;
 //! use smartcore::metrics::Metrics;
 //! let y_pred: Vec<i64> = vec![0, 2, 1, 3];
 //! let y_true: Vec<i64> = vec![0, 1, 2, 3];
 //!
-//! let score: f64 = Accuracy::new().get_score( &y_true, &y_pred);
+//! # fn main() -> SmartCoreResult<()> {
+//! let score: f64 = Accuracy::new().get_score(&y_true, &y_pred)?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
@@ -29,6 +37,7 @@
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+use crate::error::{Failed, SmartCoreResult};
 use crate::linalg::basic::arrays::ArrayView1;
 use crate::numbers::basenum::Number;
 use std::marker::PhantomData;
@@ -55,18 +64,25 @@ impl<T: Number> Metrics<T> for Accuracy<T> {
         }
     }
     /// Function that calculated accuracy score.
-    /// * `y_true` - cround truth (correct) labels
+    /// * `y_true` - ground truth (correct) labels
     /// * `y_pred` - predicted labels, as returned by a classifier.
-    fn get_score(&self, y_true: &dyn ArrayView1<T>, y_pred: &dyn ArrayView1<T>) -> f64 {
+    fn get_score(
+        &self,
+        y_true: &dyn ArrayView1<T>,
+        y_pred: &dyn ArrayView1<T>,
+    ) -> SmartCoreResult<f64> {
         if y_true.shape() != y_pred.shape() {
-            panic!(
-                "The vector sizes don't match: {} != {}",
-                y_true.shape(),
-                y_pred.shape()
-            );
+            return Err(Failed::input(
+                "Accuracy requires y_true and y_pred to have the same length",
+            ));
         }
 
         let n = y_true.shape();
+        if n == 0 {
+            return Err(Failed::input(
+                "Accuracy requires at least one observation to evaluate",
+            ));
+        }
 
         let mut positive: i32 = 0;
         for i in 0..n {
@@ -75,7 +91,7 @@ impl<T: Number> Metrics<T> for Accuracy<T> {
             }
         }
 
-        positive as f64 / n as f64
+        Ok(positive as f64 / n as f64)
     }
 }
 
@@ -88,15 +104,16 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn accuracy_float() {
+    fn accuracy_float() -> Result<(), Failed> {
         let y_pred: Vec<f64> = vec![0., 2., 1., 3.];
         let y_true: Vec<f64> = vec![0., 1., 2., 3.];
 
-        let score1: f64 = Accuracy::<f64>::new().get_score(&y_true, &y_pred);
-        let score2: f64 = Accuracy::<f64>::new().get_score(&y_true, &y_true);
+        let score1: f64 = Accuracy::<f64>::new().get_score(&y_true, &y_pred)?;
+        let score2: f64 = Accuracy::<f64>::new().get_score(&y_true, &y_true)?;
 
         assert!((score1 - 0.5).abs() < 1e-8);
         assert!((score2 - 1.0).abs() < 1e-8);
+        Ok(())
     }
 
     #[cfg_attr(
@@ -104,14 +121,15 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn accuracy_int() {
+    fn accuracy_int() -> Result<(), Failed> {
         let y_pred: Vec<i32> = vec![0, 2, 1, 3];
         let y_true: Vec<i32> = vec![0, 1, 2, 3];
 
-        let score1: f64 = Accuracy::<i32>::new().get_score(&y_true, &y_pred);
-        let score2: f64 = Accuracy::<i32>::new().get_score(&y_true, &y_true);
+        let score1: f64 = Accuracy::<i32>::new().get_score(&y_true, &y_pred)?;
+        let score2: f64 = Accuracy::<i32>::new().get_score(&y_true, &y_true)?;
 
-        assert_eq!(score1, 0.5);
-        assert_eq!(score2, 1.0);
+        assert!((score1 - 0.5).abs() < f64::EPSILON);
+        assert!((score2 - 1.0).abs() < f64::EPSILON);
+        Ok(())
     }
 }

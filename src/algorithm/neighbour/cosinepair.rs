@@ -7,6 +7,7 @@
 ///
 /// Example:
 /// ```
+/// use smartcore::error::SmartCoreResult;
 /// use smartcore::metrics::distance::PairwiseDistance;
 /// use smartcore::linalg::basic::matrix::DenseMatrix;
 /// use smartcore::algorithm::neighbour::cosinepair::CosinePair;
@@ -18,8 +19,11 @@
 ///     &[5.0, 3.6, 1.4, 0.2],
 ///     &[5.4, 3.9, 1.7, 0.4],
 /// ]).unwrap();
-/// let cosinepair = CosinePair::new(&x);
-/// let closest_pair: PairwiseDistance<f64> = cosinepair.unwrap().closest_pair();
+/// # fn main() -> SmartCoreResult<()> {
+/// let cosinepair = CosinePair::new(&x)?;
+/// let closest_pair: PairwiseDistance<f64> = cosinepair.closest_pair()?;
+/// # Ok(())
+/// # }
 /// ```
 /// <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
 /// <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
@@ -107,7 +111,7 @@ impl<'a, T: RealNumber + FloatNumber + FloatCore, M: Array2<T>> CosinePair<'a, T
             neighbours: Vec::with_capacity(m.shape().0),
             parameters,
         };
-        init.init();
+        init.init()?;
         Ok(init)
     }
 
@@ -121,8 +125,14 @@ impl<'a, T: RealNumber + FloatNumber + FloatCore, M: Array2<T>> CosinePair<'a, T
         ordered.into_inner()
     }
 
+    fn convert_distance(distance: f64) -> Result<T, Failed> {
+        T::from(distance).ok_or_else(|| {
+            Failed::invalid_state("Unable to convert cosine distance into target numeric type")
+        })
+    }
+
     /// Optimized initialization with top-k neighbor limiting
-    fn init(&mut self) {
+    fn init(&mut self) -> Result<(), Failed> {
         let len = self.samples.shape().0;
         let max_neighbors: usize = self.parameters.top_k.unwrap_or(len - 1).min(len - 1);
 
@@ -149,7 +159,7 @@ impl<'a, T: RealNumber + FloatNumber + FloatCore, M: Array2<T>> CosinePair<'a, T
 
             for j in 0..len {
                 if i != j {
-                    let distance = T::from(Cosine::new().distance(
+                    let distance = Self::convert_distance(Cosine::new().distance(
                         &Vec::from_iterator(
                             self.samples.get_row(i).iterator(0).copied(),
                             self.samples.shape().1,
@@ -158,8 +168,7 @@ impl<'a, T: RealNumber + FloatNumber + FloatCore, M: Array2<T>> CosinePair<'a, T
                             self.samples.get_row(j).iterator(0).copied(),
                             self.samples.shape().1,
                         ),
-                    ))
-                    .unwrap();
+                    )?)?;
 
                     // Use OrderedFloat for stable ordering
                     candidate_distances.push(Reverse((Self::ordered_float(distance), j)));
@@ -183,6 +192,7 @@ impl<'a, T: RealNumber + FloatNumber + FloatCore, M: Array2<T>> CosinePair<'a, T
 
         self.distances = distances;
         self.neighbours = neighbours;
+        Ok(())
     }
 
     /// Fast query using top-k pre-computed neighbors with ordered-float
@@ -222,17 +232,18 @@ impl<'a, T: RealNumber + FloatNumber + FloatCore, M: Array2<T>> CosinePair<'a, T
         };
 
         for &candidate_idx in &candidates {
-            let distance = T::from(Cosine::new().distance(
-                &Vec::from_iterator(
-                    self.samples.get_row(query_row_index).iterator(0).copied(),
-                    self.samples.shape().1,
-                ),
-                &Vec::from_iterator(
-                    self.samples.get_row(candidate_idx).iterator(0).copied(),
-                    self.samples.shape().1,
-                ),
-            ))
-            .unwrap();
+            let distance = Self::convert_distance(
+                Cosine::new().distance(
+                    &Vec::from_iterator(
+                        self.samples.get_row(query_row_index).iterator(0).copied(),
+                        self.samples.shape().1,
+                    ),
+                    &Vec::from_iterator(
+                        self.samples.get_row(candidate_idx).iterator(0).copied(),
+                        self.samples.shape().1,
+                    ),
+                )?,
+            )?;
 
             heap.push(Reverse((Self::ordered_float(distance), candidate_idx)));
 
@@ -266,23 +277,17 @@ impl<'a, T: RealNumber + FloatNumber + FloatCore, M: Array2<T>> CosinePair<'a, T
             return Ok(Vec::new());
         }
 
-        // Get distances to all other points
-        let mut distances = self.distances_from(query_row_index);
-
-        // Sort by distance (ascending)
-        distances.sort_by(|a, b| {
-            a.distance
-                .unwrap()
-                .partial_cmp(&b.distance.unwrap())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        // Take top k neighbors and convert to (distance, index) format
-        let neighbors: Vec<(T, usize)> = distances
+        let mut neighbors: Vec<(T, usize)> = self
+            .distances_from(query_row_index)?
             .into_iter()
-            .take(k)
-            .map(|pd| (pd.distance.unwrap(), pd.neighbour.unwrap()))
+            .filter_map(|pd| match (pd.distance, pd.neighbour) {
+                (Some(distance), Some(index)) => Some((distance, index)),
+                _ => None,
+            })
             .collect();
+
+        neighbors.sort_by(|a, b| Self::ordered_float(a.0).cmp(&Self::ordered_float(b.0)));
+        neighbors.truncate(k);
 
         Ok(neighbors)
     }
@@ -300,8 +305,7 @@ impl<'a, T: RealNumber + FloatNumber + FloatCore, M: Array2<T>> CosinePair<'a, T
             return Ok(Vec::new());
         }
 
-        // Compute distances from query vector to all points in the dataset
-        let mut distances = Vec::<PairwiseDistance<T>>::with_capacity(self.samples.shape().0);
+        let mut distances: Vec<(T, usize)> = Vec::with_capacity(self.samples.shape().0);
 
         for i in 0..self.samples.shape().0 {
             let dataset_point = Vec::from_iterator(
@@ -309,29 +313,14 @@ impl<'a, T: RealNumber + FloatNumber + FloatCore, M: Array2<T>> CosinePair<'a, T
                 self.samples.shape().1,
             );
 
-            let distance = T::from(Cosine::new().distance(query_vector, &dataset_point)).unwrap();
+            let distance = Self::convert_distance(Cosine::new().distance(query_vector, &dataset_point)?)?;
 
-            distances.push(PairwiseDistance {
-                node: i, // This represents the dataset point index
-                neighbour: Some(i),
-                distance: Some(distance),
-            });
+            distances.push((distance, i));
         }
 
-        // Sort by distance (ascending)
-        distances.sort_by(|a, b| {
-            a.distance
-                .unwrap()
-                .partial_cmp(&b.distance.unwrap())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        distances.sort_by(|(da, _), (db, _)| da.partial_cmp(db).unwrap_or(std::cmp::Ordering::Equal));
 
-        // Take top k neighbors and convert to (distance, index) format
-        let neighbors: Vec<(T, usize)> = distances
-            .into_iter()
-            .take(k)
-            .map(|pd| (pd.distance.unwrap(), pd.node))
-            .collect();
+        let neighbors: Vec<(T, usize)> = distances.into_iter().take(k).collect();
 
         Ok(neighbors)
     }
@@ -377,7 +366,7 @@ impl<'a, T: RealNumber + FloatNumber + FloatCore, M: Array2<T>> CosinePair<'a, T
             .distances
             .values()
             .collect::<Vec<&PairwiseDistance<T>>>();
-        distances.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         distances.into_iter()
     }
 
@@ -386,30 +375,31 @@ impl<'a, T: RealNumber + FloatNumber + FloatCore, M: Array2<T>> CosinePair<'a, T
     // input is the row index of the sample matrix
     //
     #[allow(dead_code)]
-    fn distances_from(&self, index_row: usize) -> Vec<PairwiseDistance<T>> {
+    fn distances_from(&self, index_row: usize) -> Result<Vec<PairwiseDistance<T>>, Failed> {
         let mut distances = Vec::<PairwiseDistance<T>>::with_capacity(self.samples.shape().0);
         for other in self.neighbours.iter() {
             if index_row != *other {
+                let distance = Self::convert_distance(
+                    Cosine::new().distance(
+                        &Vec::from_iterator(
+                            self.samples.get_row(index_row).iterator(0).copied(),
+                            self.samples.shape().1,
+                        ),
+                        &Vec::from_iterator(
+                            self.samples.get_row(*other).iterator(0).copied(),
+                            self.samples.shape().1,
+                        ),
+                    )?,
+                )?;
+
                 distances.push(PairwiseDistance {
                     node: index_row,
                     neighbour: Some(*other),
-                    distance: Some(
-                        T::from(Cosine::new().distance(
-                            &Vec::from_iterator(
-                                self.samples.get_row(index_row).iterator(0).copied(),
-                                self.samples.shape().1,
-                            ),
-                            &Vec::from_iterator(
-                                self.samples.get_row(*other).iterator(0).copied(),
-                                self.samples.shape().1,
-                            ),
-                        ))
-                        .unwrap(),
-                    ),
+                    distance: Some(distance),
                 })
             }
         }
-        distances
+        Ok(distances)
     }
 }
 

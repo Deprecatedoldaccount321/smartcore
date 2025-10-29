@@ -198,22 +198,23 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Failed;
 
     #[cfg_attr(
         all(target_arch = "wasm32", not(target_os = "wasi")),
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn from_categories() {
+    fn from_categories() -> Result<(), Failed> {
         let fake_categories: Vec<usize> = vec![1, 2, 3, 4, 5, 3, 5, 3, 1, 2, 4];
         let it = fake_categories.iter().copied();
         let enc = CategoryMapper::<usize>::fit_to_iter(it);
-        let oh_vec: Vec<f64> = match enc.get_one_hot(&1) {
-            None => panic!("Wrong categories"),
-            Some(v) => v,
-        };
+        let oh_vec: Vec<f64> = enc
+            .get_one_hot(&1)
+            .ok_or_else(|| Failed::input("Wrong categories"))?;
         let res: Vec<f64> = vec![1f64, 0f64, 0f64, 0f64, 0f64];
         assert_eq!(oh_vec, res);
+        Ok(())
     }
 
     fn build_fake_str_enc<'a>() -> CategoryMapper<&'a str> {
@@ -236,17 +237,17 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn category_map_and_vec() {
+    fn category_map_and_vec() -> Result<(), Failed> {
         let category_map: HashMap<&str, usize> = vec![("background", 0), ("dog", 1), ("cat", 2)]
             .into_iter()
             .collect();
         let enc = CategoryMapper::<&str>::from_category_map(category_map);
-        let oh_vec: Vec<f64> = match enc.get_one_hot(&"dog") {
-            None => panic!("Wrong categories"),
-            Some(v) => v,
-        };
+        let oh_vec: Vec<f64> = enc
+            .get_one_hot(&"dog")
+            .ok_or_else(|| Failed::input("Wrong categories"))?;
         let res: Vec<f64> = vec![0f64, 1f64, 0f64];
         assert_eq!(oh_vec, res);
+        Ok(())
     }
 
     #[cfg_attr(
@@ -254,14 +255,14 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn positional_categories_vec() {
+    fn positional_categories_vec() -> Result<(), Failed> {
         let enc = build_fake_str_enc();
-        let oh_vec: Vec<f64> = match enc.get_one_hot(&"dog") {
-            None => panic!("Wrong categories"),
-            Some(v) => v,
-        };
+        let oh_vec: Vec<f64> = enc
+            .get_one_hot(&"dog")
+            .ok_or_else(|| Failed::input("Wrong categories"))?;
         let res: Vec<f64> = vec![0.0, 1.0, 0.0];
         assert_eq!(oh_vec, res);
+        Ok(())
     }
 
     #[cfg_attr(

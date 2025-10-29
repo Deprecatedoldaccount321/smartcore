@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+use crate::error::{Failed, SmartCoreResult};
 use crate::linalg::basic::arrays::ArrayView1;
 use crate::metrics::cluster_helpers::*;
 use crate::numbers::basenum::Number;
@@ -75,11 +76,14 @@ impl<T: Number + Ord> Metrics<T> for HCVScore<T> {
     /// Computes Homogeneity, completeness and V-Measure scores at once.
     /// * `y_true` - ground truth class labels to be used as a reference.
     /// * `y_pred` - cluster labels to evaluate.    
-    fn get_score(&self, _y_true: &dyn ArrayView1<T>, _y_pred: &dyn ArrayView1<T>) -> f64 {
-        // this functions should not be used for this struct
-        // use homogeneity(), completeness(), v_measure()
-        // TODO: implement Metrics -> Result<T, Failed>
-        0f64
+    fn get_score(
+        &self,
+        _y_true: &dyn ArrayView1<T>,
+        _y_pred: &dyn ArrayView1<T>,
+    ) -> SmartCoreResult<f64> {
+        Err(Failed::invalid_state(
+            "HCVScore::get_score is not supported; call compute() and the dedicated accessors",
+        ))
     }
 }
 
@@ -92,14 +96,25 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn homogeneity_score() {
+    fn homogeneity_score() -> Result<(), Failed> {
         let v1 = vec![0, 0, 1, 1, 2, 0, 4];
         let v2 = vec![1, 0, 0, 0, 0, 1, 0];
         let mut scores = HCVScore::new();
         scores.compute(&v1, &v2);
 
-        assert!((0.2548 - scores.homogeneity.unwrap()).abs() < 1e-4);
-        assert!((0.5440 - scores.completeness.unwrap()).abs() < 1e-4);
-        assert!((0.3471 - scores.v_measure.unwrap()).abs() < 1e-4);
+        let homogeneity = scores
+            .homogeneity()
+            .ok_or_else(|| Failed::invalid_state("Homogeneity score not computed"))?;
+        let completeness = scores
+            .completeness()
+            .ok_or_else(|| Failed::invalid_state("Completeness score not computed"))?;
+        let v_measure = scores
+            .v_measure()
+            .ok_or_else(|| Failed::invalid_state("V-measure score not computed"))?;
+
+        assert!((0.2548 - homogeneity).abs() < 1e-4);
+        assert!((0.5440 - completeness).abs() < 1e-4);
+        assert!((0.3471 - v_measure).abs() < 1e-4);
+        Ok(())
     }
 }

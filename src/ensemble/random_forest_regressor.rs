@@ -419,6 +419,7 @@ impl<TX: Number + FloatNumber + PartialOrd, TY: Number, X: Array2<TX>, Y: Array1
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Failed;
     use crate::linalg::basic::matrix::DenseMatrix;
     use crate::metrics::mean_absolute_error;
 
@@ -450,7 +451,7 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn fit_longley() {
+    fn fit_longley() -> Result<(), Failed> {
         let x = DenseMatrix::from_2d_array(&[
             &[234.289, 235.6, 159., 107.608, 1947., 60.323],
             &[259.426, 232.5, 145.6, 108.632, 1948., 61.122],
@@ -491,7 +492,8 @@ mod tests {
         .and_then(|rf| rf.predict(&x))
         .unwrap();
 
-        assert!(mean_absolute_error(&y, &y_hat) < 1.0);
+        assert!(mean_absolute_error(&y, &y_hat)? < 1.0);
+        Ok(())
     }
 
     #[test]
@@ -525,7 +527,7 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn fit_predict_longley_oob() {
+    fn fit_predict_longley_oob() -> Result<(), Failed> {
         let x = DenseMatrix::from_2d_array(&[
             &[234.289, 235.6, 159., 107.608, 1947., 60.323],
             &[259.426, 232.5, 145.6, 108.632, 1948., 61.122],
@@ -568,10 +570,14 @@ mod tests {
         let y_hat = regressor.predict(&x).unwrap();
         let y_hat_oob = regressor.predict_oob(&x).unwrap();
 
-        println!("{:?}", mean_absolute_error(&y, &y_hat));
-        println!("{:?}", mean_absolute_error(&y, &y_hat_oob));
+        let mae_full = mean_absolute_error(&y, &y_hat)?;
+        let mae_oob = mean_absolute_error(&y, &y_hat_oob)?;
 
-        assert!(mean_absolute_error(&y, &y_hat) < mean_absolute_error(&y, &y_hat_oob));
+        println!("{mae_full:?}");
+        println!("{mae_oob:?}");
+
+        assert!(mae_full < mae_oob);
+        Ok(())
     }
 
     #[cfg_attr(

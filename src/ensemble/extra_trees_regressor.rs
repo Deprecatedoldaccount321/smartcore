@@ -227,11 +227,12 @@ impl<TX: Number + FloatNumber + PartialOrd, TY: Number, X: Array2<TX>, Y: Array1
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Failed;
     use crate::linalg::basic::matrix::DenseMatrix;
     use crate::metrics::mean_squared_error;
 
     #[test]
-    fn test_extra_trees_regressor_fit_predict() {
+    fn test_extra_trees_regressor_fit_predict() -> Result<(), Failed> {
         // Use a simpler, more predictable dataset for unit testing.
         let x = DenseMatrix::from_2d_array(&[
             &[1., 2.],
@@ -256,13 +257,14 @@ mod tests {
         assert_eq!(y_hat.len(), y.len());
         // A basic check to ensure the model is learning something.
         // The error should be significantly less than the variance of y.
-        let mse = mean_squared_error(&y, &y_hat);
+        let mse = mean_squared_error(&y, &y_hat)?;
         // With this simple dataset, the error should be very low.
         assert!(mse < 1.0);
+        Ok(())
     }
 
     #[test]
-    fn test_fit_predict_higher_dims() {
+    fn test_fit_predict_higher_dims() -> Result<(), Failed> {
         // Dataset with 10 features, but y is only dependent on the 3rd feature (index 2).
         let x = DenseMatrix::from_2d_array(&[
             // The 3rd column is the important one. The rest are noise.
@@ -285,11 +287,12 @@ mod tests {
 
         assert_eq!(y_hat.len(), y.len());
 
-        let mse = mean_squared_error(&y, &y_hat);
+        let mse = mean_squared_error(&y, &y_hat)?;
 
         // The model should be able to learn this simple relationship perfectly,
         // ignoring the noise features. The MSE should be very low.
         assert!(mse < 1.0);
+        Ok(())
     }
 
     #[test]

@@ -6,13 +6,17 @@
 //!
 //! Example:
 //! ```
+//! use smartcore::error::SmartCoreResult;
 //! use smartcore::metrics::auc::AUC;
 //! use smartcore::metrics::Metrics;
 //!
 //! let y_true: Vec<f64> = vec![0., 0., 1., 1.];
 //! let y_pred: Vec<f64> = vec![0.1, 0.4, 0.35, 0.8];
 //!
-//! let score1: f64 = AUC::new().get_score(&y_true, &y_pred);
+//! # fn main() -> SmartCoreResult<()> {
+//! let score1: f64 = AUC::new().get_score(&y_true, &y_pred)?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! ## References:
@@ -26,6 +30,7 @@ use std::marker::PhantomData;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+use crate::error::{Failed, SmartCoreResult};
 use crate::linalg::basic::arrays::{Array1, ArrayView1};
 use crate::numbers::floatnum::FloatNumber;
 
@@ -53,23 +58,39 @@ impl<T: FloatNumber + PartialOrd> Metrics<T> for AUC<T> {
     /// AUC score.
     /// * `y_true` - ground truth (correct) labels.
     /// * `y_pred_prob` - probability estimates, as returned by a classifier.
-    fn get_score(&self, y_true: &dyn ArrayView1<T>, y_pred_prob: &dyn ArrayView1<T>) -> f64 {
-        let mut pos = T::zero();
-        let mut neg = T::zero();
+    fn get_score(
+        &self,
+        y_true: &dyn ArrayView1<T>,
+        y_pred_prob: &dyn ArrayView1<T>,
+    ) -> SmartCoreResult<f64> {
+        if y_true.shape() != y_pred_prob.shape() {
+            return Err(Failed::input(
+                "AUC requires y_true and y_pred_prob to have the same length",
+            ));
+        }
+
+        let mut pos: usize = 0;
+        let mut neg: usize = 0;
 
         let n = y_true.shape();
 
         for i in 0..n {
-            if y_true.get(i) == &T::zero() {
-                neg += T::one();
-            } else if y_true.get(i) == &T::one() {
-                pos += T::one();
+            let label = y_true.get(i);
+            if label == &T::zero() {
+                neg += 1;
+            } else if label == &T::one() {
+                pos += 1;
             } else {
-                panic!(
-                    "AUC is only for binary classification. Invalid label: {}",
-                    y_true.get(i)
-                );
+                return Err(Failed::input(
+                    "AUC expects binary labels encoded as 0 or 1",
+                ));
             }
+        }
+
+        if pos == 0 || neg == 0 {
+            return Err(Failed::input(
+                "AUC requires at least one positive and one negative sample",
+            ));
         }
 
         let y_pred: Vec<T> =
@@ -97,15 +118,22 @@ impl<T: FloatNumber + PartialOrd> Metrics<T> for AUC<T> {
         }
 
         let mut auc = 0f64;
-        for i in 0..n {
-            if y_true.get(label_idx[i]) == &T::one() {
-                auc += rank[i];
+        for idx in 0..n {
+            if y_true.get(label_idx[idx]) == &T::one() {
+                auc += rank[idx];
             }
         }
-        let pos = pos.to_f64().unwrap();
-        let neg = neg.to_f64().unwrap();
 
-        (auc - (pos * (pos + 1f64) / 2f64)) / (pos * neg)
+        let pos = pos as f64;
+        let neg = neg as f64;
+        let denominator = pos * neg;
+        if denominator == 0.0 {
+            return Err(Failed::invalid_state(
+                "AUC denominator unexpectedly evaluated to zero",
+            ));
+        }
+
+        Ok((auc - (pos * (pos + 1f64) / 2f64)) / denominator)
     }
 }
 
@@ -118,14 +146,15 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn auc() {
+    fn auc() -> Result<(), Failed> {
         let y_true: Vec<f64> = vec![0., 0., 1., 1.];
         let y_pred: Vec<f64> = vec![0.1, 0.4, 0.35, 0.8];
 
-        let score1: f64 = AUC::new().get_score(&y_true, &y_pred);
-        let score2: f64 = AUC::new().get_score(&y_true, &y_true);
+        let score1: f64 = AUC::new().get_score(&y_true, &y_pred)?;
+        let score2: f64 = AUC::new().get_score(&y_true, &y_true)?;
 
         assert!((score1 - 0.75).abs() < 1e-8);
         assert!((score2 - 1.0).abs() < 1e-8);
+        Ok(())
     }
 }

@@ -7,13 +7,17 @@
 //! Example:
 //!
 //! ```
+//! use smartcore::error::SmartCoreResult;
 //! use smartcore::metrics::distance::Distance;
 //! use smartcore::metrics::distance::manhattan::Manhattan;
 //!
 //! let x = vec![1., 1.];
 //! let y = vec![2., 2.];
 //!
-//! let l1: f64 = Manhattan::new().distance(&x, &y);
+//! # fn main() -> SmartCoreResult<()> {
+//! let l1: f64 = Manhattan::new().distance(&x, &y)?;
+//! # Ok(())
+//! # }
 //! ```
 //! <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
 //! <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
@@ -21,6 +25,8 @@
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+use crate::error::Failed;
+use crate::error::SmartCoreResult;
 use crate::linalg::basic::arrays::ArrayView1;
 use crate::numbers::basenum::Number;
 
@@ -47,36 +53,39 @@ impl<T: Number> Default for Manhattan<T> {
 }
 
 impl<T: Number, A: ArrayView1<T>> Distance<A> for Manhattan<T> {
-    fn distance(&self, x: &A, y: &A) -> f64 {
+    fn distance(&self, x: &A, y: &A) -> SmartCoreResult<f64> {
         if x.shape() != y.shape() {
-            panic!("Input vector sizes are different");
+            return Err(Failed::input("Input vector sizes are different"));
         }
 
-        let dist: f64 = x
-            .iterator(0)
+        x.iterator(0)
             .zip(y.iterator(0))
-            .map(|(&a, &b)| (a - b).to_f64().unwrap().abs())
-            .sum();
-
-        dist
+            .try_fold(0.0_f64, |sum, (&a, &b)| {
+                let diff = (a - b)
+                    .to_f64()
+                    .ok_or_else(|| Failed::invalid_state("Unable to convert L1 difference to f64"))?;
+                Ok(sum + diff.abs())
+            })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::SmartCoreResult;
 
     #[cfg_attr(
         all(target_arch = "wasm32", not(target_os = "wasi")),
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn manhattan_distance() {
+    fn manhattan_distance() -> SmartCoreResult<()> {
         let a = vec![1., 2., 3.];
         let b = vec![4., 5., 6.];
 
-        let l1: f64 = Manhattan::new().distance(&a, &b);
+        let l1: f64 = Manhattan::new().distance(&a, &b)?;
 
         assert!((l1 - 9.0).abs() < 1e-8);
+        Ok(())
     }
 }

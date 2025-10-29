@@ -12,10 +12,12 @@
 //!
 //! Example:
 //! ```
+//! use smartcore::error::SmartCoreResult;
 //! use smartcore::linalg::basic::matrix::DenseMatrix;
 //! use smartcore::linear::logistic_regression::LogisticRegression;
 //! use smartcore::metrics::*;
 //!
+//! # fn main() -> SmartCoreResult<()> {
 //! let x = DenseMatrix::from_2d_array(&[
 //!             &[5.1, 3.5, 1.4, 0.2],
 //!             &[4.9, 3.0, 1.4, 0.2],
@@ -37,18 +39,20 @@
 //!             &[4.9, 2.4, 3.3, 1.0],
 //!             &[6.6, 2.9, 4.6, 1.3],
 //!             &[5.2, 2.7, 3.9, 1.4],
-//!   ]).unwrap();
+//!   ])?;
 //! let y: Vec<i8> = vec![
 //!             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 //!   ];
 //!
-//! let lr = LogisticRegression::fit(&x, &y, Default::default()).unwrap();
+//! let lr = LogisticRegression::fit(&x, &y, Default::default())?;
 //!
-//! let y_hat = lr.predict(&x).unwrap();
+//! let y_hat = lr.predict(&x)?;
 //!
-//! let acc = ClassificationMetricsOrd::accuracy().get_score(&y, &y_hat);
+//! let acc = ClassificationMetricsOrd::accuracy().get_score(&y, &y_hat)?;
 //! // or
-//! let acc = accuracy(&y, &y_hat);
+//! let acc = accuracy(&y, &y_hat)?;
+//! # Ok(())
+//! # }
 //! ```
 
 /// Accuracy score.
@@ -74,6 +78,7 @@ pub mod r2;
 /// Computes the recall.
 pub mod recall;
 
+use crate::error::{Failed, SmartCoreResult};
 use crate::linalg::basic::arrays::{Array1, ArrayView1};
 use crate::numbers::basenum::Number;
 use crate::numbers::floatnum::FloatNumber;
@@ -92,8 +97,12 @@ pub trait Metrics<T> {
     fn new_with(_parameter: f64) -> Self
     where
         Self: Sized;
-    /// compute score realated to this metric
-    fn get_score(&self, y_true: &dyn ArrayView1<T>, y_pred: &dyn ArrayView1<T>) -> f64;
+    /// compute score related to this metric
+    fn get_score(
+        &self,
+        y_true: &dyn ArrayView1<T>,
+        y_pred: &dyn ArrayView1<T>,
+    ) -> SmartCoreResult<f64>;
 }
 
 /// Use these metrics to compare classification models.
@@ -171,49 +180,52 @@ impl<T: Number + Ord> ClusterMetrics<T> {
 }
 
 /// Function that calculated accuracy score, see [accuracy](accuracy/index.html).
-/// * `y_true` - cround truth (correct) labels
+/// * `y_true` - ground truth (correct) labels
 /// * `y_pred` - predicted labels, as returned by a classifier.
-pub fn accuracy<T: Number + Ord, V: ArrayView1<T>>(y_true: &V, y_pred: &V) -> f64 {
+pub fn accuracy<T: Number + Ord, V: ArrayView1<T>>(
+    y_true: &V,
+    y_pred: &V,
+) -> SmartCoreResult<f64> {
     let obj = ClassificationMetricsOrd::<T>::accuracy();
     obj.get_score(y_true, y_pred)
 }
 
 /// Calculated recall score, see [recall](recall/index.html)
-/// * `y_true` - cround truth (correct) labels.
+/// * `y_true` - ground truth (correct) labels.
 /// * `y_pred` - predicted labels, as returned by a classifier.
 pub fn recall<T: Number + RealNumber + FloatNumber, V: ArrayView1<T>>(
     y_true: &V,
     y_pred: &V,
-) -> f64 {
+) -> SmartCoreResult<f64> {
     let obj = ClassificationMetrics::<T>::recall();
     obj.get_score(y_true, y_pred)
 }
 
 /// Calculated precision score, see [precision](precision/index.html).
-/// * `y_true` - cround truth (correct) labels.
+/// * `y_true` - ground truth (correct) labels.
 /// * `y_pred` - predicted labels, as returned by a classifier.
 pub fn precision<T: Number + RealNumber + FloatNumber, V: ArrayView1<T>>(
     y_true: &V,
     y_pred: &V,
-) -> f64 {
+) -> SmartCoreResult<f64> {
     let obj = ClassificationMetrics::<T>::precision();
     obj.get_score(y_true, y_pred)
 }
 
 /// Computes F1 score, see [F1](f1/index.html).
-/// * `y_true` - cround truth (correct) labels.
+/// * `y_true` - ground truth (correct) labels.
 /// * `y_pred` - predicted labels, as returned by a classifier.
 pub fn f1<T: Number + RealNumber + FloatNumber, V: ArrayView1<T>>(
     y_true: &V,
     y_pred: &V,
     beta: f64,
-) -> f64 {
+) -> SmartCoreResult<f64> {
     let obj = ClassificationMetrics::<T>::f1(beta);
     obj.get_score(y_true, y_pred)
 }
 
 /// AUC score, see [AUC](auc/index.html).
-/// * `y_true` - cround truth (correct) labels.
+/// * `y_true` - ground truth (correct) labels.
 /// * `y_pred_probabilities` - probability estimates, as returned by a classifier.
 pub fn roc_auc_score<
     T: Number + RealNumber + FloatNumber + PartialOrd,
@@ -221,7 +233,7 @@ pub fn roc_auc_score<
 >(
     y_true: &V,
     y_pred_probabilities: &V,
-) -> f64 {
+) -> SmartCoreResult<f64> {
     let obj = ClassificationMetrics::<T>::roc_auc_score();
     obj.get_score(y_true, y_pred_probabilities)
 }
@@ -232,7 +244,7 @@ pub fn roc_auc_score<
 pub fn mean_squared_error<T: Number + FloatNumber, V: ArrayView1<T>>(
     y_true: &V,
     y_pred: &V,
-) -> f64 {
+) -> SmartCoreResult<f64> {
     RegressionMetrics::<T>::mean_squared_error().get_score(y_true, y_pred)
 }
 
@@ -242,14 +254,17 @@ pub fn mean_squared_error<T: Number + FloatNumber, V: ArrayView1<T>>(
 pub fn mean_absolute_error<T: Number + FloatNumber, V: ArrayView1<T>>(
     y_true: &V,
     y_pred: &V,
-) -> f64 {
+) -> SmartCoreResult<f64> {
     RegressionMetrics::<T>::mean_absolute_error().get_score(y_true, y_pred)
 }
 
 /// Computes R2 score, see [R2](r2/index.html).
 /// * `y_true` - Ground truth (correct) target values.
 /// * `y_pred` - Estimated target values.
-pub fn r2<T: Number + FloatNumber, V: ArrayView1<T>>(y_true: &V, y_pred: &V) -> f64 {
+pub fn r2<T: Number + FloatNumber, V: ArrayView1<T>>(
+    y_true: &V,
+    y_pred: &V,
+) -> SmartCoreResult<f64> {
     RegressionMetrics::<T>::r2().get_score(y_true, y_pred)
 }
 
@@ -263,10 +278,11 @@ pub fn homogeneity_score<
 >(
     y_true: &V,
     y_pred: &V,
-) -> f64 {
+) -> SmartCoreResult<f64> {
     let mut obj = ClusterMetrics::<T>::hcv_score();
     obj.compute(y_true, y_pred);
-    obj.homogeneity().unwrap()
+    obj.homogeneity()
+        .ok_or_else(|| Failed::invalid_state("Homogeneity score is not available"))
 }
 
 ///
@@ -279,10 +295,11 @@ pub fn completeness_score<
 >(
     y_true: &V,
     y_pred: &V,
-) -> f64 {
+) -> SmartCoreResult<f64> {
     let mut obj = ClusterMetrics::<T>::hcv_score();
     obj.compute(y_true, y_pred);
-    obj.completeness().unwrap()
+    obj.completeness()
+        .ok_or_else(|| Failed::invalid_state("Completeness score is not available"))
 }
 
 /// The harmonic mean between homogeneity and completeness.
@@ -291,8 +308,9 @@ pub fn completeness_score<
 pub fn v_measure_score<T: Number + FloatNumber + RealNumber + Ord, V: ArrayView1<T> + Array1<T>>(
     y_true: &V,
     y_pred: &V,
-) -> f64 {
+) -> SmartCoreResult<f64> {
     let mut obj = ClusterMetrics::<T>::hcv_score();
     obj.compute(y_true, y_pred);
-    obj.v_measure().unwrap()
+    obj.v_measure()
+        .ok_or_else(|| Failed::invalid_state("V-measure score is not available"))
 }

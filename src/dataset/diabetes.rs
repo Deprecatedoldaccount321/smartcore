@@ -21,21 +21,18 @@
 //! * ["Least Angle Regression", Efron B., Hastie T., Johnstone I., Tibshirani R., 2004, Annals of Statistics (with discussion), 407-499](http://statweb.stanford.edu/~tibs/ftp/lars.pdf)
 use crate::dataset::deserialize_data;
 use crate::dataset::Dataset;
+use crate::error::{Failed, SmartCoreResult};
 
 /// Get dataset
-pub fn load_dataset() -> Dataset<f32, u32> {
+pub fn load_dataset() -> SmartCoreResult<Dataset<f32, u32>> {
     let (x, y, num_samples, num_features) =
-        match deserialize_data(std::include_bytes!("diabetes.xy")) {
-            Err(why) => panic!("Can't deserialize diabetes.xy. {why}"),
-            Ok((x, y, num_samples, num_features)) => (
-                x,
-                y.into_iter().map(|x| x as u32).collect(),
-                num_samples,
-                num_features,
-            ),
-        };
+        deserialize_data(std::include_bytes!("diabetes.xy")).map_err(|why| {
+            let msg = format!("Can't deserialize diabetes.xy. {why}");
+            Failed::invalid_state(&msg)
+        })?;
+    let y: Vec<u32> = y.into_iter().map(|value| value as u32).collect();
 
-    Dataset {
+    Ok(Dataset {
         data: x,
         target: y,
         num_samples,
@@ -49,13 +46,14 @@ pub fn load_dataset() -> Dataset<f32, u32> {
         target_names: vec!["Disease progression".to_string()],
         description: "Diabetes Data: https://www4.stat.ncsu.edu/~boos/var.select/diabetes.html"
             .to_string(),
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
 
     use super::*;
+    use crate::error::Failed;
 
     // TODO: fix serialization
     // #[cfg(not(target_arch = "wasm32"))]
@@ -72,8 +70,8 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn boston_dataset() {
-        let dataset = load_dataset();
+    fn boston_dataset() -> Result<(), Failed> {
+        let dataset = load_dataset()?;
         assert_eq!(
             dataset.data.len(),
             dataset.num_features * dataset.num_samples
@@ -81,5 +79,6 @@ mod tests {
         assert_eq!(dataset.target.len(), dataset.num_samples);
         assert_eq!(dataset.num_features, 10);
         assert_eq!(dataset.num_samples, 442);
+        Ok(())
     }
 }

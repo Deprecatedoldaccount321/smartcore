@@ -711,10 +711,10 @@ mod tests {
     #[test]
     fn test_for_binary_classification_builder() {
         let params = XGRegressorParameters::for_binary_classification();
-        match params.objective {
-            Objective::BinaryLogistic => {}
-            _ => panic!("Expected BinaryLogistic objective"),
-        }
+        assert!(
+            matches!(params.objective, Objective::BinaryLogistic),
+            "Expected BinaryLogistic objective"
+        );
         assert_eq!(params.base_score, 0.0);
     }
 

@@ -173,25 +173,29 @@ mod tests {
         let matrix = DenseMatrix::from_2d_array(&[&[1, 2, 3], &[4, 5, 6], &[7, 8, 9]]).unwrap();
 
         let val = vec![];
-        match Model::fit(TestDistribution(&val)).unwrap().predict(&matrix) {
-            Ok(_) => panic!("Should return error in case of empty classes"),
-            Err(err) => assert_eq!(
-                err.to_string(),
-                "Predict failed: Failed to predict, no classes available"
-            ),
-        }
+        let empty_result = Model::fit(TestDistribution(&val))
+            .unwrap()
+            .predict(&matrix);
+        assert!(
+            empty_result.is_err(),
+            "Predict should return error in case of empty classes"
+        );
+        assert_eq!(
+            empty_result.unwrap_err().to_string(),
+            "Predict failed: Failed to predict, no classes available"
+        );
 
         let val = vec![1, 2, 3];
-        match Model::fit(TestDistribution(&val)).unwrap().predict(&matrix) {
-            Ok(r) => assert_eq!(r, vec![2, 2, 2]),
-            Err(_) => panic!("Should success in normal case with NaNs"),
-        }
+        let result_with_nans = Model::fit(TestDistribution(&val))
+            .unwrap()
+            .predict(&matrix);
+        assert_eq!(result_with_nans.unwrap(), vec![2, 2, 2]);
 
         let val = vec![20, 2, 10];
-        match Model::fit(TestDistribution(&val)).unwrap().predict(&matrix) {
-            Ok(r) => assert_eq!(r, vec![20, 20, 20]),
-            Err(_) => panic!("Should success in normal case without NaNs"),
-        }
+        let result_without_nans = Model::fit(TestDistribution(&val))
+            .unwrap()
+            .predict(&matrix);
+        assert_eq!(result_without_nans.unwrap(), vec![20, 20, 20]);
     }
 
     // A simple test distribution using float

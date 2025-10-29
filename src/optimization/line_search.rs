@@ -80,7 +80,7 @@ impl<T: Float> LineSearchMethod<T> for Backtracking<T> {
 
         while fx1 > f0 + self.c1 * a2 * df0 {
             if iteration > self.max_iterations {
-                panic!("Linesearch failed to converge, reached maximum iterations.");
+                break;
             }
 
             let a_tmp;

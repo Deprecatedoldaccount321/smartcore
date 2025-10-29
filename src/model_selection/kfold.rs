@@ -3,6 +3,7 @@
 //! Defines k-fold cross validator.
 use std::fmt::{Debug, Display};
 
+use crate::error::{Failed, SmartCoreResult};
 use crate::linalg::basic::arrays::Array2;
 use crate::model_selection::BaseKFold;
 use crate::rand_custom::get_rng_impl;
@@ -137,19 +138,30 @@ impl BaseKFold for KFold {
         self.n_splits
     }
 
-    fn split<T: Debug + Display + Copy + Sized, M: Array2<T>>(&self, x: &M) -> Self::Output {
+    fn split<T: Debug + Display + Copy + Sized, M: Array2<T>>(
+        &self,
+        x: &M,
+    ) -> SmartCoreResult<Self::Output> {
         if self.n_splits < 2 {
-            panic!("Number of splits is too small: {}", self.n_splits);
+            return Err(Failed::input(
+                "KFold requires at least two splits to create train/test partitions",
+            ));
+        }
+        let n_samples: usize = x.shape().0;
+        if n_samples < self.n_splits {
+            return Err(Failed::input(
+                "KFold requires the number of samples to be greater than or equal to n_splits",
+            ));
         }
         let n_samples: usize = x.shape().0;
         let indices: Vec<usize> = (0..n_samples).collect();
         let mut test_indices = self.test_masks(x);
         test_indices.reverse();
 
-        KFoldIter {
+        Ok(KFoldIter {
             indices,
             test_indices,
-        }
+        })
     }
 }
 
@@ -157,6 +169,7 @@ impl BaseKFold for KFold {
 mod tests {
 
     use super::*;
+    use crate::error::Failed;
     use crate::linalg::basic::matrix::DenseMatrix;
 
     #[cfg_attr(
@@ -232,19 +245,20 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn run_kfold_return_split_simple() {
+    fn run_kfold_return_split_simple() -> Result<(), Failed> {
         let k = KFold {
             n_splits: 2,
             shuffle: false,
             seed: Option::None,
         };
         let x: DenseMatrix<f64> = DenseMatrix::rand(22, 100);
-        let train_test_splits: Vec<(Vec<usize>, Vec<usize>)> = k.split(&x).collect();
+        let train_test_splits: Vec<(Vec<usize>, Vec<usize>)> = k.split(&x)?.collect();
 
         assert_eq!(train_test_splits[0].1, (0..11).collect::<Vec<usize>>());
         assert_eq!(train_test_splits[0].0, (11..22).collect::<Vec<usize>>());
         assert_eq!(train_test_splits[1].0, (0..11).collect::<Vec<usize>>());
         assert_eq!(train_test_splits[1].1, (11..22).collect::<Vec<usize>>());
+        Ok(())
     }
 
     #[cfg_attr(
@@ -252,18 +266,19 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn run_kfold_return_split_simple_shuffle() {
+    fn run_kfold_return_split_simple_shuffle() -> Result<(), Failed> {
         let k = KFold {
             n_splits: 2,
             ..KFold::default()
         };
         let x: DenseMatrix<f64> = DenseMatrix::rand(23, 100);
-        let train_test_splits: Vec<(Vec<usize>, Vec<usize>)> = k.split(&x).collect();
+        let train_test_splits: Vec<(Vec<usize>, Vec<usize>)> = k.split(&x)?.collect();
 
         assert_eq!(train_test_splits[0].1.len(), 12_usize);
         assert_eq!(train_test_splits[0].0.len(), 11_usize);
         assert_eq!(train_test_splits[1].0.len(), 12_usize);
         assert_eq!(train_test_splits[1].1.len(), 11_usize);
+        Ok(())
     }
 
     #[cfg_attr(
@@ -271,7 +286,7 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn numpy_parity_test() {
+    fn numpy_parity_test() -> Result<(), Failed> {
         let k = KFold {
             n_splits: 3,
             shuffle: false,
@@ -283,10 +298,11 @@ mod tests {
             (vec![0, 1, 2, 3, 7, 8, 9], vec![4, 5, 6]),
             (vec![0, 1, 2, 3, 4, 5, 6], vec![7, 8, 9]),
         ];
-        for ((train, test), (expected_train, expected_test)) in k.split(&x).zip(expected) {
+        for ((train, test), (expected_train, expected_test)) in k.split(&x)?.zip(expected) {
             assert_eq!(test, expected_test);
             assert_eq!(train, expected_train);
         }
+        Ok(())
     }
 
     #[cfg_attr(
@@ -294,7 +310,7 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn numpy_parity_test_shuffle() {
+    fn numpy_parity_test_shuffle() -> Result<(), Failed> {
         let k = KFold {
             n_splits: 3,
             ..KFold::default()
@@ -305,9 +321,10 @@ mod tests {
             (vec![0, 1, 2, 3, 7, 8, 9], vec![4, 5, 6]),
             (vec![0, 1, 2, 3, 4, 5, 6], vec![7, 8, 9]),
         ];
-        for ((train, test), (expected_train, expected_test)) in k.split(&x).zip(expected) {
+        for ((train, test), (expected_train, expected_test)) in k.split(&x)?.zip(expected) {
             assert_eq!(test.len(), expected_test.len());
             assert_eq!(train.len(), expected_train.len());
         }
+        Ok(())
     }
 }

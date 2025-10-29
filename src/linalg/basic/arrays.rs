@@ -694,8 +694,8 @@ pub trait MutArrayView1<T: Debug + Display + Copy + Sized>:
                 index[j] = b;
                 jstack += 2;
 
-                if jstack >= 64 {
-                    panic!("stack size is too small.");
+                if jstack >= istack.len() as i32 {
+                    istack.resize(istack.len() + stack_size, 0);
                 }
 
                 if ir - i + 1 >= j - l {

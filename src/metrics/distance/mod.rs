@@ -28,6 +28,7 @@ pub mod minkowski;
 
 use std::cmp::{Eq, Ordering, PartialOrd};
 
+use crate::error::SmartCoreResult;
 use crate::linalg::basic::arrays::Array2;
 use crate::linalg::traits::lu::LUDecomposable;
 use crate::numbers::basenum::Number;
@@ -39,7 +40,7 @@ use serde::{Deserialize, Serialize};
 /// Distance metric, a function that calculates distance between two points
 pub trait Distance<T>: Clone {
     /// Calculates distance between _a_ and _b_
-    fn distance(&self, a: &T, b: &T) -> f64;
+    fn distance(&self, a: &T, b: &T) -> SmartCoreResult<f64>;
 }
 
 /// Multitude of distance metric functions
@@ -70,7 +71,7 @@ impl Distances {
     /// Mahalanobis distance, see [`Mahalanobis`](mahalanobis/index.html)
     pub fn mahalanobis<T: Number, M: Array2<T>, C: Array2<f64> + LUDecomposable<f64>>(
         data: &M,
-    ) -> mahalanobis::Mahalanobis<T, C> {
+    ) -> SmartCoreResult<mahalanobis::Mahalanobis<T, C>> {
         mahalanobis::Mahalanobis::new(data)
     }
 }

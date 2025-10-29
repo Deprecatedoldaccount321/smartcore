@@ -17,21 +17,19 @@
 //!
 use crate::dataset::deserialize_data;
 use crate::dataset::Dataset;
+use crate::error::{Failed, SmartCoreResult};
 
 /// Get dataset
-pub fn load_dataset() -> Dataset<f32, u32> {
-    let (x, y, num_samples, num_features): (Vec<f32>, Vec<u32>, usize, usize) =
-        match deserialize_data(std::include_bytes!("iris.xy")) {
-            Err(why) => panic!("Can't deserialize iris.xy. {why}"),
-            Ok((x, y, num_samples, num_features)) => (
-                x,
-                y.into_iter().map(|x| x as u32).collect(),
-                num_samples,
-                num_features,
-            ),
-        };
+pub fn load_dataset() -> SmartCoreResult<Dataset<f32, u32>> {
+    let (x, y, num_samples, num_features): (Vec<f32>, Vec<f32>, usize, usize) =
+        deserialize_data(std::include_bytes!("iris.xy")).map_err(|why| {
+            let msg = format!("Can't deserialize iris.xy. {why}");
+            Failed::invalid_state(&msg)
+        })?;
 
-    Dataset {
+    let y: Vec<u32> = y.into_iter().map(|value| value as u32).collect();
+
+    Ok(Dataset {
         data: x,
         target: y,
         num_samples,
@@ -50,7 +48,7 @@ pub fn load_dataset() -> Dataset<f32, u32> {
             .map(|s| s.to_string())
             .collect(),
         description: "Iris dataset: https://archive.ics.uci.edu/ml/datasets/iris".to_string(),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -59,6 +57,7 @@ mod tests {
     // #[cfg(not(target_arch = "wasm32"))]
     // use super::super::*;
     use super::*;
+    use crate::error::Failed;
 
     // TODO: fix serialization
     // #[cfg(not(target_arch = "wasm32"))]
@@ -75,11 +74,12 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn iris_dataset() {
-        let dataset = load_dataset();
+    fn iris_dataset() -> Result<(), Failed> {
+        let dataset = load_dataset()?;
         assert_eq!(dataset.data.len(), 50 * 3 * 4);
         assert_eq!(dataset.target.len(), 50 * 3);
         assert_eq!(dataset.num_features, 4);
         assert_eq!(dataset.num_samples, 50 * 3);
+        Ok(())
     }
 }

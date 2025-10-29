@@ -8,15 +8,18 @@
 //! Example:
 //!
 //! ```
+//! use smartcore::error::SmartCoreResult;
 //! use smartcore::metrics::distance::Distance;
 //! use smartcore::metrics::distance::minkowski::Minkowski;
 //!
 //! let x = vec![1., 1.];
 //! let y = vec![2., 2.];
 //!
-//! let l1: f64 = Minkowski::new(1).distance(&x, &y);
-//! let l2: f64 = Minkowski::new(2).distance(&x, &y);
-//!
+//! # fn main() -> SmartCoreResult<()> {
+//! let l1: f64 = Minkowski::new(1).distance(&x, &y)?;
+//! let l2: f64 = Minkowski::new(2).distance(&x, &y)?;
+//! # Ok(())
+//! # }
 //! ```
 //! <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
 //! <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
@@ -25,6 +28,8 @@
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+use crate::error::Failed;
+use crate::error::SmartCoreResult;
 use crate::linalg::basic::arrays::ArrayView1;
 use crate::numbers::basenum::Number;
 
@@ -47,54 +52,60 @@ impl<T: Number> Minkowski<T> {
 }
 
 impl<T: Number, A: ArrayView1<T>> Distance<A> for Minkowski<T> {
-    fn distance(&self, x: &A, y: &A) -> f64 {
+    fn distance(&self, x: &A, y: &A) -> SmartCoreResult<f64> {
         if x.shape() != y.shape() {
-            panic!("Input vector sizes are different");
+            return Err(Failed::input("Input vector sizes are different"));
         }
         if self.p < 1 {
-            panic!("p must be at least 1");
+            return Err(Failed::input("p must be at least 1"));
         }
 
         let p_t = self.p as f64;
 
-        let dist: f64 = x
+        let dist = x
             .iterator(0)
             .zip(y.iterator(0))
-            .map(|(&a, &b)| (a - b).to_f64().unwrap().abs().powf(p_t))
-            .sum();
+            .try_fold(0.0_f64, |sum, (&a, &b)| {
+                let delta = (a - b)
+                    .to_f64()
+                    .ok_or_else(|| Failed::invalid_state("Unable to convert Minkowski delta to f64"))?;
+                Ok(sum + delta.abs().powf(p_t))
+            })?;
 
-        dist.powf(1f64 / p_t)
+        Ok(dist.powf(1f64 / p_t))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::SmartCoreResult;
 
     #[cfg_attr(
         all(target_arch = "wasm32", not(target_os = "wasi")),
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn minkowski_distance() {
+    fn minkowski_distance() -> SmartCoreResult<()> {
         let a = vec![1., 2., 3.];
         let b = vec![4., 5., 6.];
 
-        let l1: f64 = Minkowski::new(1).distance(&a, &b);
-        let l2: f64 = Minkowski::new(2).distance(&a, &b);
-        let l3: f64 = Minkowski::new(3).distance(&a, &b);
+        let l1: f64 = Minkowski::new(1).distance(&a, &b)?;
+        let l2: f64 = Minkowski::new(2).distance(&a, &b)?;
+        let l3: f64 = Minkowski::new(3).distance(&a, &b)?;
 
         assert!((l1 - 9.0).abs() < 1e-8);
         assert!((l2 - 5.19615242).abs() < 1e-8);
         assert!((l3 - 4.32674871).abs() < 1e-8);
+        Ok(())
     }
 
     #[test]
-    #[should_panic(expected = "p must be at least 1")]
     fn minkowski_distance_negative_p() {
         let a = vec![1., 2., 3.];
         let b = vec![4., 5., 6.];
 
-        let _: f64 = Minkowski::new(0).distance(&a, &b);
+        let result = Minkowski::new(0).distance(&a, &b);
+        assert!(result.is_err());
     }
 }

@@ -11,6 +11,7 @@
 //!
 //! ```
 //! use smartcore::linalg::basic::matrix::DenseMatrix;
+//! use smartcore::error::SmartCoreResult;
 //! use smartcore::model_selection::train_test_split;
 //! use smartcore::linalg::basic::arrays::Array;
 //!
@@ -41,10 +42,13 @@
 //!           0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
 //! ];
 //!
-//! let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, None);
+//! # fn main() -> SmartCoreResult<()> {
+//! let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, None)?;
 //!
 //! println!("X train: {:?}, y train: {}, X test: {:?}, y test: {}",
 //!             x_train.shape(), y_train.len(), x_test.shape(), y_test.len());
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! When we partition the available data into two disjoint sets, we drastically reduce the number of samples that can be used for training.
@@ -56,7 +60,8 @@
 //!
 //! ```
 //! use smartcore::linalg::basic::matrix::DenseMatrix;
-//! use smartcore::model_selection::{KFold, cross_validate};
+//! use smartcore::error::SmartCoreResult;
+//! use smartcore::model_selection::{cross_validate, KFold};
 //! use smartcore::metrics::accuracy;
 //! use smartcore::linear::logistic_regression::LogisticRegression;
 //! use smartcore::api::SupervisedEstimator;
@@ -91,15 +96,19 @@
 //!
 //! let cv = KFold::default().with_n_splits(3);
 //!
+//! # fn main() -> SmartCoreResult<()> {
 //! let results = cross_validate(
-//!     LogisticRegression::new(),   //estimator
-//!     &x, &y,                 //data
-//!     Default::default(),     //hyperparameters
-//!     &cv,                     //cross validation split
-//!     &accuracy).unwrap();    //metric
+//!     LogisticRegression::new(),   // estimator
+//!     &x, &y,                      // data
+//!     Default::default(),          // hyperparameters
+//!     &cv,                         // cross validation split
+//!     &accuracy,
+//! )?;
 //!
 //! println!("Training accuracy: {}, test accuracy: {}",
 //!     results.mean_test_score(), results.mean_train_score());
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! The function [cross_val_predict](./fn.cross_val_predict.html) has a similar interface to `cross_val_score`,
@@ -110,7 +119,7 @@ use std::fmt::{Debug, Display};
 
 #[allow(unused_imports)]
 use crate::api::{Predictor, SupervisedEstimator};
-use crate::error::Failed;
+use crate::error::{Failed, SmartCoreResult};
 use crate::linalg::basic::arrays::{Array1, Array2};
 use crate::numbers::basenum::Number;
 use crate::numbers::realnum::RealNumber;
@@ -129,7 +138,7 @@ pub trait BaseKFold {
     type Output: Iterator<Item = (Vec<usize>, Vec<usize>)>;
     /// Return a tuple containing the the training set indices for that split and
     /// the testing set indices for that split.
-    fn split<T: Number, X: Array2<T>>(&self, x: &X) -> Self::Output;
+    fn split<T: Number, X: Array2<T>>(&self, x: &X) -> SmartCoreResult<Self::Output>;
     /// Returns the number of splits
     fn n_splits(&self) -> usize;
 }
@@ -150,18 +159,18 @@ pub fn train_test_split<
     test_size: f32,
     shuffle: bool,
     seed: Option<u64>,
-) -> (X, X, Y, Y) {
+) -> SmartCoreResult<(X, X, Y, Y)> {
     if x.shape().0 != y.shape() {
-        panic!(
+        return Err(Failed::input(&format!(
             "x and y should have the same number of samples. |x|: {}, |y|: {}",
             x.shape().0,
             y.shape()
-        );
+        )));
     }
     let mut rng = get_rng_impl(seed);
 
     if test_size <= 0. || test_size > 1.0 {
-        panic!("test_size should be between 0 and 1");
+        return Err(Failed::input("test_size should be between 0 and 1"));
     }
 
     let n = y.shape();
@@ -169,7 +178,9 @@ pub fn train_test_split<
     let n_test = ((n as f32) * test_size) as usize;
 
     if n_test < 1 {
-        panic!("number of sample is too small {n}");
+        return Err(Failed::input(&format!(
+            "number of samples ({n}) is too small for the requested test_size"
+        )));
     }
 
     let mut indices: Vec<usize> = (0..n).collect();
@@ -183,7 +194,7 @@ pub fn train_test_split<
     let y_train = y.take(&indices[n_test..n]);
     let y_test = y.take(&indices[0..n_test]);
 
-    (x_train, x_test, y_train, y_test)
+    Ok((x_train, x_test, y_train, y_test))
 }
 
 /// Cross validation results.
@@ -237,13 +248,14 @@ where
     H: Clone,
     K: BaseKFold,
     E: SupervisedEstimator<X, Y, H>,
-    S: Fn(&Y, &Y) -> f64,
+    S: Fn(&Y, &Y) -> SmartCoreResult<f64>,
 {
     let k = cv.n_splits();
     let mut test_score: Vec<f64> = Vec::with_capacity(k);
     let mut train_score: Vec<f64> = Vec::with_capacity(k);
 
-    for (train_idx, test_idx) in cv.split(x) {
+    let mut splits = cv.split(x)?;
+    for (train_idx, test_idx) in &mut splits {
         let train_x = x.take(&train_idx, 0);
         let train_y = y.take(&train_idx);
         let test_x = x.take(&test_idx, 0);
@@ -253,8 +265,8 @@ where
         let computed =
             <E as SupervisedEstimator<X, Y, H>>::fit(&train_x, &train_y, parameters.clone())?;
 
-        train_score.push(score(&train_y, &computed.predict(&train_x)?));
-        test_score.push(score(&test_y, &computed.predict(&test_x)?));
+        train_score.push(score(&train_y, &computed.predict(&train_x)?)?);
+        test_score.push(score(&test_y, &computed.predict(&test_x)?)?);
     }
 
     Ok(CrossValidationResult {
@@ -288,7 +300,8 @@ where
 {
     let mut y_hat = Y::zeros(y.shape());
 
-    for (train_idx, test_idx) in cv.split(x) {
+    let mut splits = cv.split(x)?;
+    for (train_idx, test_idx) in &mut splits {
         let train_x = x.take(&train_idx, 0);
         let train_y = y.take(&train_idx);
         let test_x = x.take(&test_idx, 0);
@@ -309,6 +322,7 @@ where
 mod tests {
 
     use super::*;
+    use crate::error::Failed;
     use crate::algorithm::neighbour::KNNAlgorithmName;
     use crate::api::NoParameters;
     use crate::linalg::basic::arrays::Array;
@@ -326,12 +340,12 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn run_train_test_split() {
+    fn run_train_test_split() -> Result<(), Failed> {
         let n = 123;
         let x: DenseMatrix<f64> = DenseMatrix::rand(n, 3);
         let y = vec![0f64; n];
 
-        let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, None);
+        let (x_train, x_test, y_train, y_test) = train_test_split(&x, &y, 0.2, true, None)?;
 
         assert!(
             x_train.shape().0 > (n as f64 * 0.65) as usize
@@ -343,6 +357,7 @@ mod tests {
         );
         assert_eq!(x_train.shape().0, y_train.len());
         assert_eq!(x_test.shape().0, y_test.len());
+        Ok(())
     }
 
     #[derive(Clone)]
@@ -354,7 +369,7 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn test_cross_validate_biased() {
+    fn test_cross_validate_biased() -> Result<(), Failed> {
         struct BiasedEstimator {}
 
         impl<X: Array2<f32>, Y: Array1<u32>, P: NoParameters> SupervisedEstimator<X, Y, P>
@@ -412,11 +427,11 @@ mod tests {
             BiasedParameters {},
             &cv,
             &accuracy,
-        )
-        .unwrap();
+        )?;
 
         assert_eq!(0.4, results.mean_test_score());
         assert_eq!(0.4, results.mean_train_score());
+        Ok(())
     }
 
     #[cfg_attr(
@@ -424,7 +439,7 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn test_cross_validate_knn() {
+    fn test_cross_validate_knn() -> Result<(), Failed> {
         let x = DenseMatrix::from_2d_array(&[
             &[234.289, 235.6, 159., 107.608, 1947., 60.323],
             &[259.426, 232.5, 145.6, 108.632, 1948., 61.122],
@@ -461,11 +476,11 @@ mod tests {
             Default::default(),
             &cv,
             &mean_absolute_error,
-        )
-        .unwrap();
+        )?;
 
         assert!(results.mean_test_score() < 15.0);
         assert!(results.mean_train_score() < results.mean_test_score());
+        Ok(())
     }
 
     #[cfg_attr(
@@ -473,7 +488,7 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn test_cross_val_predict_knn() {
+    fn test_cross_val_predict_knn() -> Result<(), Failed> {
         let x: DenseMatrix<f64> = DenseMatrix::from_2d_array(&[
             &[234.289, 235.6, 159., 107.608, 1947., 60.323],
             &[259.426, 232.5, 145.6, 108.632, 1948., 61.122],
@@ -513,14 +528,14 @@ mod tests {
                 .with_algorithm(KNNAlgorithmName::LinearSearch)
                 .with_weight(KNNWeightFunction::Distance),
             &cv,
-        )
-        .unwrap();
+        )?;
 
-        assert!(mean_absolute_error(&y, &y_hat) < 10.0);
+        assert!(mean_absolute_error(&y, &y_hat)? < 10.0);
+        Ok(())
     }
 
     #[test]
-    fn test_cross_validation_accuracy() {
+    fn test_cross_validation_accuracy() -> Result<(), Failed> {
         let x = DenseMatrix::from_2d_array(&[
             &[5.1, 3.5, 1.4, 0.2],
             &[4.9, 3.0, 1.4, 0.2],
@@ -555,8 +570,8 @@ mod tests {
             Default::default(),
             &cv,
             &accuracy,
-        )
-        .unwrap();
+        )?;
         println!("{results:?}");
+        Ok(())
     }
 }

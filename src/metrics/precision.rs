@@ -9,12 +9,16 @@
 //! Example:
 //!
 //! ```
+//! use smartcore::error::SmartCoreResult;
 //! use smartcore::metrics::precision::Precision;
 //! use smartcore::metrics::Metrics;
 //! let y_pred: Vec<f64> = vec![0., 1., 1., 0.];
 //! let y_true: Vec<f64> = vec![0., 0., 1., 1.];
 //!
-//! let score: f64 = Precision::new().get_score(&y_true, &y_pred);
+//! # fn main() -> SmartCoreResult<()> {
+//! let score: f64 = Precision::new().get_score(&y_true, &y_pred)?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
@@ -25,6 +29,7 @@ use std::marker::PhantomData;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+use crate::error::{Failed, SmartCoreResult};
 use crate::linalg::basic::arrays::ArrayView1;
 use crate::numbers::realnum::RealNumber;
 
@@ -52,34 +57,49 @@ impl<T: RealNumber> Metrics<T> for Precision<T> {
     /// Calculated precision score
     /// * `y_true` - ground truth (correct) labels.
     /// * `y_pred` - predicted labels, as returned by a classifier.
-    fn get_score(&self, y_true: &dyn ArrayView1<T>, y_pred: &dyn ArrayView1<T>) -> f64 {
+    fn get_score(
+        &self,
+        y_true: &dyn ArrayView1<T>,
+        y_pred: &dyn ArrayView1<T>,
+    ) -> SmartCoreResult<f64> {
         if y_true.shape() != y_pred.shape() {
-            panic!(
-                "The vector sizes don't match: {} != {}",
-                y_true.shape(),
-                y_pred.shape()
-            );
+            return Err(Failed::input(
+                "Precision requires y_true and y_pred to have the same length",
+            ));
         }
 
+        let len = y_true.shape();
+        if len == 0 {
+            return Err(Failed::input(
+                "Precision requires at least one observation to evaluate",
+            ));
+        }
         let mut classes = HashSet::new();
-        for i in 0..y_true.shape() {
+        for i in 0..len {
             classes.insert(y_true.get(i).to_f64_bits());
         }
         let classes = classes.len();
+        if classes == 0 {
+            return Err(Failed::input(
+                "Precision requires at least one distinct class label",
+            ));
+        }
 
-        let mut tp = 0;
-        let mut fp = 0;
-        for i in 0..y_true.shape() {
-            if y_pred.get(i) == y_true.get(i) {
+        let mut tp: usize = 0;
+        let mut fp: usize = 0;
+        for i in 0..len {
+            let actual = y_true.get(i);
+            let predicted = y_pred.get(i);
+            if predicted == actual {
                 if classes == 2 {
-                    if *y_true.get(i) == T::one() {
+                    if *actual == T::one() {
                         tp += 1;
                     }
                 } else {
                     tp += 1;
                 }
             } else if classes == 2 {
-                if *y_true.get(i) == T::one() {
+                if *actual == T::one() {
                     fp += 1;
                 }
             } else {
@@ -87,7 +107,14 @@ impl<T: RealNumber> Metrics<T> for Precision<T> {
             }
         }
 
-        tp as f64 / (tp as f64 + fp as f64)
+        let denominator = tp + fp;
+        if denominator == 0 {
+            return Err(Failed::input(
+                "Precision is undefined because there are no positive predictions",
+            ));
+        }
+
+        Ok(tp as f64 / denominator as f64)
     }
 }
 
@@ -100,12 +127,12 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn precision() {
+    fn precision() -> Result<(), Failed> {
         let y_true: Vec<f64> = vec![0., 1., 1., 0.];
         let y_pred: Vec<f64> = vec![0., 0., 1., 1.];
 
-        let score1: f64 = Precision::new().get_score(&y_true, &y_pred);
-        let score2: f64 = Precision::new().get_score(&y_pred, &y_pred);
+        let score1: f64 = Precision::new().get_score(&y_true, &y_pred)?;
+        let score2: f64 = Precision::new().get_score(&y_pred, &y_pred)?;
 
         assert!((score1 - 0.5).abs() < 1e-8);
         assert!((score2 - 1.0).abs() < 1e-8);
@@ -113,8 +140,9 @@ mod tests {
         let y_true: Vec<f64> = vec![0., 1., 1., 0., 1., 0.];
         let y_pred: Vec<f64> = vec![0., 0., 1., 1., 1., 1.];
 
-        let score3: f64 = Precision::new().get_score(&y_true, &y_pred);
+        let score3: f64 = Precision::new().get_score(&y_true, &y_pred)?;
         assert!((score3 - 0.6666666666).abs() < 1e-8);
+        Ok(())
     }
 
     #[cfg_attr(
@@ -122,14 +150,15 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn precision_multiclass() {
+    fn precision_multiclass() -> Result<(), Failed> {
         let y_true: Vec<f64> = vec![0., 0., 0., 1., 1., 1., 2., 2., 2.];
         let y_pred: Vec<f64> = vec![0., 1., 2., 0., 1., 2., 0., 1., 2.];
 
-        let score1: f64 = Precision::new().get_score(&y_true, &y_pred);
-        let score2: f64 = Precision::new().get_score(&y_pred, &y_pred);
+        let score1: f64 = Precision::new().get_score(&y_true, &y_pred)?;
+        let score2: f64 = Precision::new().get_score(&y_pred, &y_pred)?;
 
         assert!((score1 - 0.333333333).abs() < 1e-8);
         assert!((score2 - 1.0).abs() < 1e-8);
+        Ok(())
     }
 }

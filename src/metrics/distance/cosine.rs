@@ -14,13 +14,17 @@
 //! Example:
 //!
 //! ```
+//! use smartcore::error::SmartCoreResult;
 //! use smartcore::metrics::distance::Distance;
 //! use smartcore::metrics::distance::cosine::Cosine;
 //!
 //! let x = vec![1., 1.];
 //! let y = vec![2., 2.];
 //!
-//! let cosine_dist: f64 = Cosine::new().distance(&x, &y);
+//! # fn main() -> SmartCoreResult<()> {
+//! let cosine_dist: f64 = Cosine::new().distance(&x, &y)?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
@@ -29,6 +33,8 @@
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+use crate::error::Failed;
+use crate::error::SmartCoreResult;
 use crate::linalg::basic::arrays::ArrayView1;
 use crate::numbers::basenum::Number;
 
@@ -56,25 +62,27 @@ impl<T: Number> Cosine<T> {
 
     /// Calculate the dot product of two vectors using smartcore's ArrayView1 trait
     #[inline]
-    pub(crate) fn dot_product<A: ArrayView1<T>>(x: &A, y: &A) -> f64 {
+    pub(crate) fn dot_product<A: ArrayView1<T>>(x: &A, y: &A) -> SmartCoreResult<f64> {
         if x.shape() != y.shape() {
-            panic!("Input vector sizes are different.");
+            return Err(Failed::input("Input vector sizes are different."));
         }
 
         // Use the built-in dot product method from ArrayView1 trait
-        x.dot(y).to_f64().unwrap()
+        x.dot(y)
+            .to_f64()
+            .ok_or_else(|| Failed::invalid_state("Unable to convert dot product to f64"))
     }
 
     /// Calculate the squared magnitude (norm squared) of a vector
     #[inline]
     #[allow(dead_code)]
-    pub(crate) fn squared_magnitude<A: ArrayView1<T>>(x: &A) -> f64 {
-        x.iterator(0)
-            .map(|&a| {
-                let val = a.to_f64().unwrap();
-                val * val
-            })
-            .sum()
+    pub(crate) fn squared_magnitude<A: ArrayView1<T>>(x: &A) -> SmartCoreResult<f64> {
+        x.iterator(0).try_fold(0.0_f64, |sum, &a| {
+            let value = a
+                .to_f64()
+                .ok_or_else(|| Failed::invalid_state("Unable to convert vector element to f64"))?;
+            Ok(sum + value * value)
+        })
     }
 
     /// Calculate the magnitude (Euclidean norm) of a vector using smartcore's norm2 method
@@ -86,42 +94,45 @@ impl<T: Number> Cosine<T> {
 
     /// Calculate cosine similarity between two vectors
     #[inline]
-    pub(crate) fn cosine_similarity<A: ArrayView1<T>>(x: &A, y: &A) -> f64 {
-        let dot_product = Self::dot_product(x, y);
+    pub(crate) fn cosine_similarity<A: ArrayView1<T>>(x: &A, y: &A) -> SmartCoreResult<f64> {
+        let dot_product = Self::dot_product(x, y)?;
         let magnitude_x = Self::magnitude(x);
         let magnitude_y = Self::magnitude(y);
 
         if magnitude_x == 0.0 || magnitude_y == 0.0 {
-            return f64::MIN;
+            return Err(Failed::input(
+                "Cosine distance requires non-zero vectors for both inputs.",
+            ));
         }
 
-        dot_product / (magnitude_x * magnitude_y)
+        Ok(dot_product / (magnitude_x * magnitude_y))
     }
 }
 
 impl<T: Number, A: ArrayView1<T>> Distance<A> for Cosine<T> {
-    fn distance(&self, x: &A, y: &A) -> f64 {
-        let similarity = Cosine::cosine_similarity(x, y);
-        1.0 - similarity
+    fn distance(&self, x: &A, y: &A) -> SmartCoreResult<f64> {
+        Cosine::cosine_similarity(x, y).map(|similarity| 1.0 - similarity)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::SmartCoreResult;
 
     #[cfg_attr(
         all(target_arch = "wasm32", not(target_os = "wasi")),
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn cosine_distance_identical_vectors() {
+    fn cosine_distance_identical_vectors() -> SmartCoreResult<()> {
         let a = vec![1, 2, 3];
         let b = vec![1, 2, 3];
 
-        let dist: f64 = Cosine::new().distance(&a, &b);
+        let dist: f64 = Cosine::new().distance(&a, &b)?;
 
         assert!((dist - 0.0).abs() < 1e-8);
+        Ok(())
     }
 
     #[cfg_attr(
@@ -129,13 +140,14 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn cosine_distance_orthogonal_vectors() {
+    fn cosine_distance_orthogonal_vectors() -> SmartCoreResult<()> {
         let a = vec![1, 0];
         let b = vec![0, 1];
 
-        let dist: f64 = Cosine::new().distance(&a, &b);
+        let dist: f64 = Cosine::new().distance(&a, &b)?;
 
         assert!((dist - 1.0).abs() < 1e-8);
+        Ok(())
     }
 
     #[cfg_attr(
@@ -143,13 +155,14 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn cosine_distance_opposite_vectors() {
+    fn cosine_distance_opposite_vectors() -> SmartCoreResult<()> {
         let a = vec![1, 2, 3];
         let b = vec![-1, -2, -3];
 
-        let dist: f64 = Cosine::new().distance(&a, &b);
+        let dist: f64 = Cosine::new().distance(&a, &b)?;
 
         assert!((dist - 2.0).abs() < 1e-8);
+        Ok(())
     }
 
     #[cfg_attr(
@@ -157,17 +170,18 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn cosine_distance_general_case() {
+    fn cosine_distance_general_case() -> SmartCoreResult<()> {
         let a = vec![1.0, 2.0, 3.0];
         let b = vec![2.0, 1.0, 3.0];
 
-        let dist: f64 = Cosine::new().distance(&a, &b);
+        let dist: f64 = Cosine::new().distance(&a, &b)?;
 
         // Expected cosine similarity: (1*2 + 2*1 + 3*3) / (sqrt(1+4+9) * sqrt(4+1+9))
         // = (2 + 2 + 9) / (sqrt(14) * sqrt(14)) = 13/14 ≈ 0.9286
         // So cosine distance = 1 - 13/14 = 1/14 ≈ 0.0714
         let expected_dist = 1.0 - (13.0 / 14.0);
         assert!((dist - expected_dist).abs() < 1e-8);
+        Ok(())
     }
 
     #[cfg_attr(
@@ -175,12 +189,12 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    #[should_panic(expected = "Input vector sizes are different.")]
     fn cosine_distance_different_sizes() {
         let a = vec![1, 2];
         let b = vec![1, 2, 3];
 
-        let _dist: f64 = Cosine::new().distance(&a, &b);
+        let result = Cosine::new().distance(&a, &b);
+        assert!(result.is_err());
     }
 
     #[cfg_attr(
@@ -192,8 +206,8 @@ mod tests {
         let a = vec![0, 0, 0];
         let b = vec![1, 2, 3];
 
-        let dist: f64 = Cosine::new().distance(&a, &b);
-        assert!(dist > 1e300)
+        let dist = Cosine::new().distance(&a, &b);
+        assert!(dist.is_err());
     }
 
     #[cfg_attr(

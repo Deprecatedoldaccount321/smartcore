@@ -9,13 +9,17 @@
 //! Example:
 //!
 //! ```
+//! use smartcore::error::SmartCoreResult;
 //! use smartcore::metrics::f1::F1;
 //! use smartcore::metrics::Metrics;
 //! let y_pred: Vec<f64> = vec![0., 0., 1., 1., 1., 1.];
 //! let y_true: Vec<f64> = vec![0., 1., 1., 0., 1., 0.];
 //!
 //! let beta = 1.0; // beta default is equal 1.0 anyway
-//! let score: f64 = F1::new_with(beta).get_score( &y_true, &y_pred);
+//! # fn main() -> SmartCoreResult<()> {
+//! let score: f64 = F1::new_with(beta).get_score(&y_true, &y_pred)?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
@@ -25,6 +29,7 @@ use std::marker::PhantomData;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+use crate::error::{Failed, SmartCoreResult};
 use crate::linalg::basic::arrays::ArrayView1;
 use crate::metrics::precision::Precision;
 use crate::metrics::recall::Recall;
@@ -59,22 +64,31 @@ impl<T: Number + RealNumber + FloatNumber> Metrics<T> for F1<T> {
         }
     }
     /// Computes F1 score
-    /// * `y_true` - cround truth (correct) labels.
+    /// * `y_true` - ground truth (correct) labels.
     /// * `y_pred` - predicted labels, as returned by a classifier.
-    fn get_score(&self, y_true: &dyn ArrayView1<T>, y_pred: &dyn ArrayView1<T>) -> f64 {
+    fn get_score(
+        &self,
+        y_true: &dyn ArrayView1<T>,
+        y_pred: &dyn ArrayView1<T>,
+    ) -> SmartCoreResult<f64> {
         if y_true.shape() != y_pred.shape() {
-            panic!(
-                "The vector sizes don't match: {} != {}",
-                y_true.shape(),
-                y_pred.shape()
-            );
+            return Err(Failed::input(
+                "F1 score requires y_true and y_pred to have the same length",
+            ));
         }
         let beta2 = self.beta * self.beta;
 
-        let p = Precision::new().get_score(y_true, y_pred);
-        let r = Recall::new().get_score(y_true, y_pred);
+        let p = Precision::new().get_score(y_true, y_pred)?;
+        let r = Recall::new().get_score(y_true, y_pred)?;
 
-        (1f64 + beta2) * (p * r) / ((beta2 * p) + r)
+        let denominator = (beta2 * p) + r;
+        if denominator == 0.0 {
+            return Err(Failed::input(
+                "F1 score is undefined because precision and recall are zero",
+            ));
+        }
+
+        Ok((1f64 + beta2) * (p * r) / denominator)
     }
 }
 
@@ -87,18 +101,19 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn f1() {
+    fn f1() -> Result<(), Failed> {
         let y_pred: Vec<f64> = vec![0., 0., 1., 1., 1., 1.];
         let y_true: Vec<f64> = vec![0., 1., 1., 0., 1., 0.];
 
         let beta = 1.0;
-        let score1: f64 = F1::new_with(beta).get_score(&y_true, &y_pred);
-        let score2: f64 = F1::new_with(beta).get_score(&y_true, &y_true);
+        let score1: f64 = F1::new_with(beta).get_score(&y_true, &y_pred)?;
+        let score2: f64 = F1::new_with(beta).get_score(&y_true, &y_true)?;
 
         println!("{score1:?}");
         println!("{score2:?}");
 
         assert!((score1 - 0.57142857).abs() < 1e-8);
         assert!((score2 - 1.0).abs() < 1e-8);
+        Ok(())
     }
 }

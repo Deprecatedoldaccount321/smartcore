@@ -128,3 +128,6 @@ impl fmt::Display for Failed {
 }
 
 impl Error for Failed {}
+
+/// Convenient result alias used across smartcore to surface actionable errors.
+pub type SmartCoreResult<T> = Result<T, Failed>;

@@ -6,14 +6,17 @@
 //! Example:
 //!
 //! ```
+//! use smartcore::error::SmartCoreResult;
 //! use smartcore::metrics::distance::Distance;
 //! use smartcore::metrics::distance::hamming::Hamming;
 //!
 //! let a = vec![1, 0, 0, 1, 0, 0, 1];
 //! let b = vec![1, 1, 0, 0, 1, 0, 1];
 //!
-//! let h: f64 = Hamming::new().distance(&a, &b);
-//!
+//! # fn main() -> SmartCoreResult<()> {
+//! let h: f64 = Hamming::new().distance(&a, &b)?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
@@ -24,6 +27,8 @@ use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
 use super::Distance;
+use crate::error::Failed;
+use crate::error::SmartCoreResult;
 use crate::linalg::basic::arrays::ArrayView1;
 use crate::numbers::basenum::Number;
 
@@ -48,12 +53,12 @@ impl<T: Number> Default for Hamming<T> {
 }
 
 impl<T: Number, A: ArrayView1<T>> Distance<A> for Hamming<T> {
-    fn distance(&self, x: &A, y: &A) -> f64 {
+    fn distance(&self, x: &A, y: &A) -> SmartCoreResult<f64> {
         if x.shape() != y.shape() {
-            panic!("Input vector sizes are different");
+            return Err(Failed::input("Input vector sizes are different"));
         }
 
-        let dist: usize = x
+        let mismatches: usize = x
             .iterator(0)
             .zip(y.iterator(0))
             .map(|(a, b)| match a != b {
@@ -62,25 +67,32 @@ impl<T: Number, A: ArrayView1<T>> Distance<A> for Hamming<T> {
             })
             .sum();
 
-        dist as f64 / x.shape() as f64
+        let len = x.shape();
+        if len == 0 {
+            return Err(Failed::input("Hamming distance requires non-empty vectors"));
+        }
+
+        Ok(mismatches as f64 / len as f64)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::SmartCoreResult;
 
     #[cfg_attr(
         all(target_arch = "wasm32", not(target_os = "wasi")),
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn hamming_distance() {
+    fn hamming_distance() -> SmartCoreResult<()> {
         let a = vec![1, 0, 0, 1, 0, 0, 1];
         let b = vec![1, 1, 0, 0, 1, 0, 1];
 
-        let h: f64 = Hamming::new().distance(&a, &b);
+        let h: f64 = Hamming::new().distance(&a, &b)?;
 
         assert!((h - 0.42857142).abs() < 1e-8);
+        Ok(())
     }
 }

@@ -462,6 +462,7 @@ impl<TX: FloatNumber + RealNumber, TY: Number, X: Array2<TX>, Y: Array1<TY>>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Failed;
     use crate::linalg::basic::matrix::DenseMatrix;
     use crate::metrics::mean_absolute_error;
 
@@ -493,7 +494,7 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn elasticnet_longley() {
+    fn elasticnet_longley() -> Result<(), Failed> {
         let x = DenseMatrix::from_2d_array(&[
             &[234.289, 235.6, 159.0, 107.608, 1947., 60.323],
             &[259.426, 232.5, 145.6, 108.632, 1948., 61.122],
@@ -533,7 +534,8 @@ mod tests {
         .and_then(|lr| lr.predict(&x))
         .unwrap();
 
-        assert!(mean_absolute_error(&y_hat, &y) < 30.0);
+        assert!(mean_absolute_error(&y_hat, &y)? < 30.0);
+        Ok(())
     }
 
     #[cfg_attr(
@@ -541,7 +543,7 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn elasticnet_fit_predict1() {
+    fn elasticnet_fit_predict1() -> Result<(), Failed> {
         let x = DenseMatrix::from_2d_array(&[
             &[0.0, 1931.0, 1.2232755825400514],
             &[1.0, 1933.0, 1.1379726120972395],
@@ -597,14 +599,15 @@ mod tests {
         )
         .unwrap();
 
-        let mae_l1 = mean_absolute_error(&l1_model.predict(&x).unwrap(), &y);
-        let mae_l2 = mean_absolute_error(&l2_model.predict(&x).unwrap(), &y);
+        let mae_l1 = mean_absolute_error(&l1_model.predict(&x).unwrap(), &y)?;
+        let mae_l2 = mean_absolute_error(&l2_model.predict(&x).unwrap(), &y)?;
 
         assert!(mae_l1 < 2.0);
         assert!(mae_l2 < 2.0);
 
         assert!(l1_model.coefficients().get((0, 0)) > l1_model.coefficients().get((1, 0)));
         assert!(l1_model.coefficients().get((0, 0)) > l1_model.coefficients().get((2, 0)));
+        Ok(())
     }
 
     // TODO: serialization for the new DenseMatrix needs to be implemented

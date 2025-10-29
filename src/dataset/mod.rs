@@ -59,27 +59,23 @@ pub(crate) fn serialize_data<X: Number + RealNumber, Y: RealNumber>(
     dataset: &Dataset<X, Y>,
     filename: &str,
 ) -> Result<(), io::Error> {
-    match File::create(filename) {
-        Ok(mut file) => {
-            file.write_all(&dataset.num_features.to_le_bytes())?;
-            file.write_all(&dataset.num_samples.to_le_bytes())?;
-            let x: Vec<u8> = dataset
-                .data
-                .iter()
-                .copied()
-                .flat_map(|f| f.to_f32_bits().to_le_bytes().to_vec())
-                .collect();
-            file.write_all(&x)?;
-            let y: Vec<u8> = dataset
-                .target
-                .iter()
-                .copied()
-                .flat_map(|f| f.to_f32_bits().to_le_bytes().to_vec())
-                .collect();
-            file.write_all(&y)?;
-        }
-        Err(why) => panic!("couldn't create {filename}: {why}"),
-    }
+    let mut file = File::create(filename)?;
+    file.write_all(&dataset.num_features.to_le_bytes())?;
+    file.write_all(&dataset.num_samples.to_le_bytes())?;
+    let x: Vec<u8> = dataset
+        .data
+        .iter()
+        .copied()
+        .flat_map(|f| f.to_f32_bits().to_le_bytes().to_vec())
+        .collect();
+    file.write_all(&x)?;
+    let y: Vec<u8> = dataset
+        .target
+        .iter()
+        .copied()
+        .flat_map(|f| f.to_f32_bits().to_le_bytes().to_vec())
+        .collect();
+    file.write_all(&y)?;
     Ok(())
 }
 

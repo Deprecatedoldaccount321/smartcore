@@ -7,6 +7,7 @@
 ///
 /// Example:
 /// ```
+/// use smartcore::error::SmartCoreResult;
 /// use smartcore::metrics::distance::PairwiseDistance;
 /// use smartcore::linalg::basic::matrix::DenseMatrix;
 /// use smartcore::algorithm::neighbour::fastpair::FastPair;
@@ -18,8 +19,11 @@
 ///     &[5.0, 3.6, 1.4, 0.2],
 ///     &[5.4, 3.9, 1.7, 0.4],
 /// ]).unwrap();
-/// let fastpair = FastPair::new(&x);
-/// let closest_pair: PairwiseDistance<f64> = fastpair.unwrap().closest_pair();
+/// # fn main() -> SmartCoreResult<()> {
+/// let fastpair = FastPair::new(&x)?;
+/// let closest_pair: PairwiseDistance<f64> = fastpair.closest_pair()?;
+/// # Ok(())
+/// # }
 /// ```
 /// <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
 /// <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
@@ -27,7 +31,7 @@ use std::collections::HashMap;
 
 use num::Bounded;
 
-use crate::error::{Failed, FailedError};
+use crate::error::{Failed, FailedError, SmartCoreResult};
 use crate::linalg::basic::arrays::{Array1, Array2};
 use crate::metrics::distance::euclidian::Euclidian;
 use crate::metrics::distance::PairwiseDistance;
@@ -52,9 +56,33 @@ pub struct FastPair<'a, T: RealNumber + FloatNumber, M: Array2<T>> {
 }
 
 impl<'a, T: RealNumber + FloatNumber, M: Array2<T>> FastPair<'a, T, M> {
+    fn distance_value(distance: Option<T>) -> f64 {
+        distance
+            .and_then(|value| value.to_f64())
+            .unwrap_or(f64::INFINITY)
+    }
+
+    fn convert_distance(distance: f64) -> SmartCoreResult<T> {
+        T::from(distance)
+            .ok_or_else(|| Failed::invalid_state("Unable to convert distance to numeric type"))
+    }
+
+    fn update_pair(
+        entry: &mut PairwiseDistance<T>,
+        neighbour: usize,
+        distance: f64,
+    ) -> SmartCoreResult<()> {
+        let current = Self::distance_value(entry.distance);
+        if distance < current {
+            entry.distance = Some(Self::convert_distance(distance)?);
+            entry.neighbour = Some(neighbour);
+        }
+        Ok(())
+    }
+
     /// Constructor
     /// Instantiate and initialize the algorithm
-    pub fn new(m: &'a M) -> Result<Self, Failed> {
+    pub fn new(m: &'a M) -> SmartCoreResult<Self> {
         if m.shape().0 < 3 {
             return Err(Failed::because(
                 FailedError::FindFailed,
@@ -68,55 +96,30 @@ impl<'a, T: RealNumber + FloatNumber, M: Array2<T>> FastPair<'a, T, M> {
             distances: HashMap::with_capacity(m.shape().0),
             neighbours: Vec::with_capacity(m.shape().0 + 1),
         };
-        init.init();
+        init.init()?;
         Ok(init)
     }
 
     /// Initialise `FastPair` by passing a `Array2`.
     /// Build a FastPairs data-structure from a set of (new) points.
-    fn init(&mut self) {
-        // basic measures
+    fn init(&mut self) -> SmartCoreResult<()> {
         let len = self.samples.shape().0;
-        let max_index = self.samples.shape().0 - 1;
 
-        // Store all closest neighbors
-        let _distances = Box::new(HashMap::with_capacity(len));
-        let _neighbours = Box::new(Vec::with_capacity(len));
-
-        let mut distances = *_distances;
-        let mut neighbours = *_neighbours;
-
-        // fill neighbours with -1 values
-        neighbours.extend(0..len);
-
-        // init closest neighbour pairwise data
-        for index_row_i in 0..(max_index) {
+        let mut distances: HashMap<usize, PairwiseDistance<T>> = HashMap::with_capacity(len);
+        for index in 0..len {
             distances.insert(
-                index_row_i,
+                index,
                 PairwiseDistance {
-                    node: index_row_i,
-                    neighbour: Option::None,
-                    distance: Some(<T as Bounded>::max_value()),
+                    node: index,
+                    neighbour: None,
+                    distance: None,
                 },
             );
         }
 
-        // loop through indeces and neighbours
-        for index_row_i in 0..(len) {
-            // start looking for the neighbour in the second element
-            let mut index_closest = index_row_i + 1; // closest neighbour index
-            let mut nbd: Option<T> = distances[&index_row_i].distance; // init neighbour distance
+        for index_row_i in 0..len {
             for index_row_j in (index_row_i + 1)..len {
-                distances.insert(
-                    index_row_j,
-                    PairwiseDistance {
-                        node: index_row_j,
-                        neighbour: Some(index_row_i),
-                        distance: nbd,
-                    },
-                );
-
-                let d = Euclidian::squared_distance(
+                let distance = Euclidian::squared_distance(
                     &Vec::from_iterator(
                         self.samples.get_row(index_row_i).iterator(0).copied(),
                         self.samples.shape().1,
@@ -125,52 +128,58 @@ impl<'a, T: RealNumber + FloatNumber, M: Array2<T>> FastPair<'a, T, M> {
                         self.samples.get_row(index_row_j).iterator(0).copied(),
                         self.samples.shape().1,
                     ),
-                );
-                if d < nbd.unwrap().to_f64().unwrap() {
-                    // set this j-value to be the closest neighbour
-                    index_closest = index_row_j;
-                    nbd = Some(T::from(d).unwrap());
+                )?;
+
+                if let Some(entry_i) = distances.get_mut(&index_row_i) {
+                    Self::update_pair(entry_i, index_row_j, distance)?;
+                }
+                if let Some(entry_j) = distances.get_mut(&index_row_j) {
+                    Self::update_pair(entry_j, index_row_i, distance)?;
                 }
             }
-
-            // Add that edge
-            distances.entry(index_row_i).and_modify(|e| {
-                e.distance = nbd;
-                e.neighbour = Some(index_closest);
-            });
         }
-        // No more neighbors, terminate conga line.
-        // Last person on the line has no neigbors
-        distances.get_mut(&max_index).unwrap().neighbour = Some(max_index);
-        distances.get_mut(&(len - 1)).unwrap().distance = Some(<T as Bounded>::max_value());
 
-        // compute sparse matrix (connectivity matrix)
+        for entry in distances.values_mut() {
+            if entry.neighbour.is_none() {
+                entry.neighbour = Some(entry.node);
+            }
+            if entry.distance.is_none() {
+                entry.distance = Some(<T as Bounded>::max_value());
+            }
+        }
+
         let mut sparse_matrix = M::zeros(len, len);
-        for (_, p) in distances.iter() {
-            sparse_matrix.set((p.node, p.neighbour.unwrap()), p.distance.unwrap());
+        for pd in distances.values() {
+            if let (Some(neighbour), Some(distance)) = (pd.neighbour, pd.distance) {
+                sparse_matrix.set((pd.node, neighbour), distance);
+            }
         }
 
         self.distances = distances;
-        self.neighbours = neighbours;
+        self.neighbours = (0..len).collect();
+
+        Ok(())
     }
 
     /// Find closest pair by scanning list of nearest neighbors.
     #[allow(dead_code)]
-    pub fn closest_pair(&self) -> PairwiseDistance<T> {
-        let mut a = self.neighbours[0]; // Start with first point
-        let mut d = self.distances[&a].distance;
-        for p in self.neighbours.iter() {
-            if self.distances[p].distance < d {
-                a = *p; // Update `a` and distance `d`
-                d = self.distances[p].distance;
+    pub fn closest_pair(&self) -> SmartCoreResult<PairwiseDistance<T>> {
+        let mut best: Option<(PairwiseDistance<T>, f64)> = None;
+        for node in &self.neighbours {
+            let entry = *self
+                .distances
+                .get(node)
+                .ok_or_else(|| Failed::invalid_state("Missing distance entry"))?;
+            let value = Self::distance_value(entry.distance);
+            match best {
+                Some((_, best_value)) if value >= best_value => {}
+                _ => best = Some((entry, value)),
             }
         }
-        let b = self.distances[&a].neighbour;
-        PairwiseDistance {
-            node: a,
-            neighbour: b,
-            distance: d,
-        }
+
+        best
+            .map(|(pd, _)| pd)
+            .ok_or_else(|| Failed::invalid_state("No distances available"))
     }
 
     ///
@@ -184,7 +193,13 @@ impl<'a, T: RealNumber + FloatNumber, M: Array2<T>> FastPair<'a, T, M> {
             .distances
             .values()
             .collect::<Vec<&PairwiseDistance<T>>>();
-        distances.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        distances.sort_by(|a, b| {
+            let a_value = Self::distance_value(a.distance);
+            let b_value = Self::distance_value(b.distance);
+            a_value
+                .partial_cmp(&b_value)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         distances.into_iter()
     }
 
@@ -193,30 +208,29 @@ impl<'a, T: RealNumber + FloatNumber, M: Array2<T>> FastPair<'a, T, M> {
     // input is the row index of the sample matrix
     //
     #[allow(dead_code)]
-    fn distances_from(&self, index_row: usize) -> Vec<PairwiseDistance<T>> {
+    fn distances_from(&self, index_row: usize) -> SmartCoreResult<Vec<PairwiseDistance<T>>> {
         let mut distances = Vec::<PairwiseDistance<T>>::with_capacity(self.samples.shape().0);
-        for other in self.neighbours.iter() {
-            if index_row != *other {
+        for other in self.neighbours.iter().copied() {
+            if index_row != other {
+                let distance = Euclidian::squared_distance(
+                    &Vec::from_iterator(
+                        self.samples.get_row(index_row).iterator(0).copied(),
+                        self.samples.shape().1,
+                    ),
+                    &Vec::from_iterator(
+                        self.samples.get_row(other).iterator(0).copied(),
+                        self.samples.shape().1,
+                    ),
+                )?;
+
                 distances.push(PairwiseDistance {
                     node: index_row,
-                    neighbour: Some(*other),
-                    distance: Some(
-                        T::from(Euclidian::squared_distance(
-                            &Vec::from_iterator(
-                                self.samples.get_row(index_row).iterator(0).copied(),
-                                self.samples.shape().1,
-                            ),
-                            &Vec::from_iterator(
-                                self.samples.get_row(*other).iterator(0).copied(),
-                                self.samples.shape().1,
-                            ),
-                        ))
-                        .unwrap(),
-                    ),
+                    neighbour: Some(other),
+                    distance: Some(Self::convert_distance(distance)?),
                 })
             }
         }
-        distances
+        Ok(distances)
     }
 }
 
@@ -229,7 +243,7 @@ mod tests_fastpair {
     /// Brute force algorithm, used only for comparison and testing
     pub fn closest_pair_brute(
         fastpair: &FastPair<'_, f64, DenseMatrix<f64>>,
-    ) -> PairwiseDistance<f64> {
+    ) -> SmartCoreResult<PairwiseDistance<f64>> {
         use itertools::Itertools;
         let m = fastpair.samples.shape().0;
 
@@ -248,14 +262,14 @@ mod tests_fastpair {
                     fastpair.samples.get_row(pair[1]).iterator(0).copied(),
                     fastpair.samples.shape().1,
                 ),
-            );
+            )?;
             if d < closest_pair.distance.unwrap() {
                 closest_pair.node = pair[0];
                 closest_pair.neighbour = Some(pair[1]);
                 closest_pair.distance = Some(d);
             }
         }
-        closest_pair
+        Ok(closest_pair)
     }
 
     #[test]
@@ -303,7 +317,7 @@ mod tests_fastpair {
         assert!(result.is_ok());
 
         let fastpair = result.unwrap();
-        let closest_pair = fastpair.closest_pair();
+        let closest_pair = fastpair.closest_pair().unwrap();
         let expected_closest_pair = PairwiseDistance {
             node: 0,
             neighbour: Some(1),
@@ -311,7 +325,7 @@ mod tests_fastpair {
         };
         assert_eq!(closest_pair, expected_closest_pair);
 
-        let closest_pair_brute = closest_pair_brute(&fastpair);
+        let closest_pair_brute = closest_pair_brute(&fastpair).unwrap();
         assert_eq!(closest_pair_brute, expected_closest_pair);
     }
 
@@ -324,13 +338,13 @@ mod tests_fastpair {
         assert!(result.is_ok());
 
         let fastpair = result.unwrap();
-        let closest_pair = fastpair.closest_pair();
+        let closest_pair = fastpair.closest_pair().unwrap();
         let expected_closest_pair = PairwiseDistance {
             node: 1,
             neighbour: Some(3),
             distance: Some(4.0),
         };
-        assert_eq!(closest_pair, closest_pair_brute(&fastpair));
+        assert_eq!(closest_pair, closest_pair_brute(&fastpair).unwrap());
         assert_eq!(closest_pair, expected_closest_pair);
     }
 
@@ -533,7 +547,7 @@ mod tests_fastpair {
         let fastpair = FastPair::new(&x);
         assert!(fastpair.is_ok());
 
-        let dissimilarity = fastpair.unwrap().closest_pair();
+        let dissimilarity = fastpair.unwrap().closest_pair().unwrap();
         let closest = PairwiseDistance {
             node: 0,
             neighbour: Some(4),
@@ -552,8 +566,8 @@ mod tests_fastpair {
 
         let result = fastpair.unwrap();
 
-        let dissimilarity1 = result.closest_pair();
-        let dissimilarity2 = closest_pair_brute(&result);
+        let dissimilarity1 = result.closest_pair().unwrap();
+        let dissimilarity2 = closest_pair_brute(&result).unwrap();
 
         assert_eq!(dissimilarity1, dissimilarity2);
     }
@@ -582,7 +596,7 @@ mod tests_fastpair {
         let fastpair = FastPair::new(&x);
         assert!(fastpair.is_ok());
 
-        let dissimilarities = fastpair.unwrap().distances_from(0);
+        let dissimilarities = fastpair.unwrap().distances_from(0).unwrap();
 
         let mut min_dissimilarity = PairwiseDistance {
             node: 0,
@@ -686,7 +700,7 @@ mod tests_fastpair {
         let result = FastPair::new(&identical_points);
         assert!(result.is_ok());
         let fastpair = result.unwrap();
-        let closest_pair = fastpair.closest_pair();
+        let closest_pair = fastpair.closest_pair().unwrap();
         assert_eq!(closest_pair.distance, Some(0.0));
     }
 

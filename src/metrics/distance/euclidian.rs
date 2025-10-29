@@ -7,13 +7,17 @@
 //! Example:
 //!
 //! ```
+//! use smartcore::error::SmartCoreResult;
 //! use smartcore::metrics::distance::Distance;
 //! use smartcore::metrics::distance::euclidian::Euclidian;
 //!
 //! let x = vec![1., 1.];
 //! let y = vec![2., 2.];
 //!
-//! let l2: f64 = Euclidian::new().distance(&x, &y);
+//! # fn main() -> SmartCoreResult<()> {
+//! let l2: f64 = Euclidian::new().distance(&x, &y)?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
@@ -22,6 +26,8 @@
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+use crate::error::Failed;
+use crate::error::SmartCoreResult;
 use crate::linalg::basic::arrays::ArrayView1;
 use crate::numbers::basenum::Number;
 
@@ -48,45 +54,46 @@ impl<T: Number> Euclidian<T> {
 
     /// return sum of squared distances
     #[inline]
-    pub(crate) fn squared_distance<A: ArrayView1<T>>(x: &A, y: &A) -> f64 {
+    pub(crate) fn squared_distance<A: ArrayView1<T>>(x: &A, y: &A) -> SmartCoreResult<f64> {
         if x.shape() != y.shape() {
-            panic!("Input vector sizes are different.");
+            return Err(Failed::input("Input vector sizes are different."));
         }
 
-        let sum: f64 = x
-            .iterator(0)
+        x.iterator(0)
             .zip(y.iterator(0))
-            .map(|(&a, &b)| {
+            .try_fold(0.0_f64, |sum, (&a, &b)| {
                 let r = a - b;
-                (r * r).to_f64().unwrap()
+                let squared = (r * r).to_f64().ok_or_else(|| {
+                    Failed::invalid_state("Unable to convert squared Euclidean delta to f64")
+                })?;
+                Ok(sum + squared)
             })
-            .sum();
-
-        sum
     }
 }
 
 impl<T: Number, A: ArrayView1<T>> Distance<A> for Euclidian<T> {
-    fn distance(&self, x: &A, y: &A) -> f64 {
-        Euclidian::squared_distance(x, y).sqrt()
+    fn distance(&self, x: &A, y: &A) -> SmartCoreResult<f64> {
+        Euclidian::squared_distance(x, y).map(f64::sqrt)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::SmartCoreResult;
 
     #[cfg_attr(
         all(target_arch = "wasm32", not(target_os = "wasi")),
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn squared_distance() {
+    fn squared_distance() -> SmartCoreResult<()> {
         let a = vec![1, 2, 3];
         let b = vec![4, 5, 6];
 
-        let l2: f64 = Euclidian::new().distance(&a, &b);
+        let l2: f64 = Euclidian::new().distance(&a, &b)?;
 
         assert!((l2 - 5.19615242).abs() < 1e-8);
+        Ok(())
     }
 }

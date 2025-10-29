@@ -28,21 +28,19 @@
 //! For instance, field 0 is Mean Radius, field 10 is Radius SE, field 20 is Worst Radius.
 use crate::dataset::deserialize_data;
 use crate::dataset::Dataset;
+use crate::error::{Failed, SmartCoreResult};
 
 /// Get dataset
-pub fn load_dataset() -> Dataset<f32, u32> {
+pub fn load_dataset() -> SmartCoreResult<Dataset<f32, u32>> {
     let (x, y, num_samples, num_features) =
-        match deserialize_data(std::include_bytes!("breast_cancer.xy")) {
-            Err(why) => panic!("Can't deserialize breast_cancer.xy. {why}"),
-            Ok((x, y, num_samples, num_features)) => (
-                x,
-                y.into_iter().map(|x| x as u32).collect(),
-                num_samples,
-                num_features,
-            ),
-        };
+        deserialize_data(std::include_bytes!("breast_cancer.xy")).map_err(|why| {
+            let msg = format!("Can't deserialize breast_cancer.xy. {why}");
+            Failed::invalid_state(&msg)
+        })?;
 
-    Dataset {
+    let y: Vec<u32> = y.into_iter().map(|value| value as u32).collect();
+
+    Ok(Dataset {
         data: x,
         target: y,
         num_samples,
@@ -65,13 +63,14 @@ pub fn load_dataset() -> Dataset<f32, u32> {
         target_names: vec!["malignant or benign [0, 1]".to_string()],
         description: "Breast Cancer Wisconsin (Diagnostic) Data Set: https://archive.ics.uci.edu/ml/datasets/Breast+Cancer+Wisconsin+%28Diagnostic%29"
             .to_string(),
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
 
     use super::*;
+    use crate::error::Failed;
 
     // TODO: implement serialization
     // #[test]
@@ -88,8 +87,8 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn cancer_dataset() {
-        let dataset = load_dataset();
+    fn cancer_dataset() -> Result<(), Failed> {
+        let dataset = load_dataset()?;
         assert_eq!(
             dataset.data.len(),
             dataset.num_features * dataset.num_samples
@@ -97,5 +96,6 @@ mod tests {
         assert_eq!(dataset.target.len(), dataset.num_samples);
         assert_eq!(dataset.num_features, 30);
         assert_eq!(dataset.num_samples, 569);
+        Ok(())
     }
 }

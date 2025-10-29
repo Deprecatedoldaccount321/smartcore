@@ -3,9 +3,8 @@
 //! reading from strings instead.
 use rand::distributions::{Alphanumeric, DistString};
 use std::fs;
-use std::io::Bytes;
 use std::io::Read;
-use std::io::{Chain, IoSliceMut, Take, Write};
+use std::io::{Error, ErrorKind, IoSliceMut, Write};
 
 /// Writing out a temporary csv file at a random location and cleaning
 /// it up on `Drop`.
@@ -28,8 +27,7 @@ impl TemporaryTextFile {
 /// On `Drop` we cleanup the file-system by remove the file.
 impl Drop for TemporaryTextFile {
     fn drop(&mut self) {
-        fs::remove_file(self.path())
-            .unwrap_or_else(|_| panic!("Could not clean up temporary file {}.", self.random_path));
+        let _ = fs::remove_file(self.path());
     }
 }
 /// Write out a string to file.
@@ -57,46 +55,39 @@ impl TestingDataSource {
 /// file in a more lightweight way.
 impl Read for TestingDataSource {
     fn read(&mut self, _buf: &mut [u8]) -> Result<usize, std::io::Error> {
-        unimplemented!()
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "byte reads are not supported for TestingDataSource",
+        ))
     }
 
     fn read_vectored(&mut self, _bufs: &mut [IoSliceMut<'_>]) -> Result<usize, std::io::Error> {
-        unimplemented!()
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "vectored reads are not supported for TestingDataSource",
+        ))
     }
 
     fn read_to_end(&mut self, _buf: &mut Vec<u8>) -> Result<usize, std::io::Error> {
-        unimplemented!()
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "read_to_end is not supported for TestingDataSource",
+        ))
     }
     fn read_to_string(&mut self, buf: &mut String) -> Result<usize, std::io::Error> {
-        <String as std::fmt::Write>::write_str(buf, &self.text).unwrap();
+        <String as std::fmt::Write>::write_str(buf, &self.text).map_err(|err| {
+            Error::new(
+                ErrorKind::Other,
+                format!("Failed to push data into buffer: {err}"),
+            )
+        })?;
         Ok(0)
     }
     fn read_exact(&mut self, _buf: &mut [u8]) -> Result<(), std::io::Error> {
-        unimplemented!()
-    }
-    fn by_ref(&mut self) -> &mut Self
-    where
-        Self: Sized,
-    {
-        unimplemented!()
-    }
-    fn bytes(self) -> Bytes<Self>
-    where
-        Self: Sized,
-    {
-        unimplemented!()
-    }
-    fn chain<R: Read>(self, _next: R) -> Chain<Self, R>
-    where
-        Self: Sized,
-    {
-        unimplemented!()
-    }
-    fn take(self, _limit: u64) -> Take<Self>
-    where
-        Self: Sized,
-    {
-        unimplemented!()
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "read_exact is not supported for TestingDataSource",
+        ))
     }
 }
 

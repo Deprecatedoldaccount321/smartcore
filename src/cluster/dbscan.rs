@@ -397,6 +397,7 @@ impl<TX: Number, TY: Number, X: Array2<TX>, Y: Array1<TY>, D: Distance<Vec<TX>>>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Failed;
     use crate::linalg::basic::matrix::DenseMatrix;
     #[cfg(feature = "serde")]
     use crate::metrics::distance::euclidian::Euclidian;
@@ -501,11 +502,11 @@ mod tests {
 
     #[cfg(feature = "datasets")]
     #[test]
-    fn from_vec() {
+    fn from_vec() -> Result<(), Failed> {
         use crate::dataset::generator;
 
         // Generate three blobs
-        let blobs = generator::make_blobs(100, 2, 3);
+        let blobs = generator::make_blobs(100, 2, 3)?;
         let x: DenseMatrix<f32> = DenseMatrix::from_iterator(blobs.data.into_iter(), 100, 2, 0);
         // Fit the algorithm and predict cluster labels
         let labels: Vec<i32> = DBSCAN::fit(&x, DBSCANParameters::default().with_eps(3.0))
@@ -513,5 +514,6 @@ mod tests {
             .unwrap();
 
         println!("{labels:?}");
+        Ok(())
     }
 }

@@ -5,13 +5,14 @@ use rand::prelude::*;
 use rand_distr::Normal;
 
 use crate::dataset::Dataset;
+use crate::error::{Failed, SmartCoreResult};
 
 /// Generate `num_centers` clusters of normally distributed points
 pub fn make_blobs(
     num_samples: usize,
     num_features: usize,
     num_centers: usize,
-) -> Dataset<f32, f32> {
+) -> SmartCoreResult<Dataset<f32, f32>> {
     let center_box = Uniform::from(-10.0..10.0);
     let cluster_std = 1.0;
     let mut centers: Vec<Vec<Normal<f32>>> = Vec::with_capacity(num_centers);
@@ -20,8 +21,14 @@ pub fn make_blobs(
     for _ in 0..num_centers {
         centers.push(
             (0..num_features)
-                .map(|_| Normal::new(center_box.sample(&mut rng), cluster_std).unwrap())
-                .collect(),
+                .map(|_| {
+                    Normal::new(center_box.sample(&mut rng), cluster_std).map_err(|err| {
+                        Failed::invalid_state(&format!(
+                            "Failed to create normal distribution for blob center: {err}"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
         );
     }
 
@@ -36,7 +43,7 @@ pub fn make_blobs(
         }
     }
 
-    Dataset {
+    Ok(Dataset {
         data: x,
         target: y,
         num_samples,
@@ -44,13 +51,15 @@ pub fn make_blobs(
         feature_names: (0..num_features).map(|n| n.to_string()).collect(),
         target_names: vec!["label".to_string()],
         description: "Isotropic Gaussian blobs".to_string(),
-    }
+    })
 }
 
 /// Make a large circle containing a smaller circle in 2d.
-pub fn make_circles(num_samples: usize, factor: f32, noise: f32) -> Dataset<f32, u32> {
+pub fn make_circles(num_samples: usize, factor: f32, noise: f32) -> SmartCoreResult<Dataset<f32, u32>> {
     if !(0.0..1.0).contains(&factor) {
-        panic!("'factor' has to be between 0 and 1.");
+        return Err(Failed::input(
+            "'factor' must be between 0 and 1 (exclusive of 1)",
+        ));
     }
 
     let num_samples_out = num_samples / 2;
@@ -59,7 +68,11 @@ pub fn make_circles(num_samples: usize, factor: f32, noise: f32) -> Dataset<f32,
     let linspace_out = linspace(0.0, 2.0 * std::f32::consts::PI, num_samples_out);
     let linspace_in = linspace(0.0, 2.0 * std::f32::consts::PI, num_samples_in);
 
-    let noise = Normal::new(0.0, noise).unwrap();
+    let noise = Normal::new(0.0, noise).map_err(|err| {
+        Failed::invalid_state(&format!(
+            "Failed to create normal distribution for circle noise: {err}"
+        ))
+    })?;
     let mut rng = rand::thread_rng();
 
     let mut x: Vec<f32> = Vec::with_capacity(num_samples * 2);
@@ -77,7 +90,7 @@ pub fn make_circles(num_samples: usize, factor: f32, noise: f32) -> Dataset<f32,
         y.push(1.0);
     }
 
-    Dataset {
+    Ok(Dataset {
         data: x,
         target: y.into_iter().map(|x| x as u32).collect(),
         num_samples,
@@ -85,18 +98,22 @@ pub fn make_circles(num_samples: usize, factor: f32, noise: f32) -> Dataset<f32,
         feature_names: (0..2).map(|n| n.to_string()).collect(),
         target_names: vec!["label".to_string()],
         description: "Large circle containing a smaller circle in 2d".to_string(),
-    }
+    })
 }
 
 /// Make two interleaving half circles in 2d
-pub fn make_moons(num_samples: usize, noise: f32) -> Dataset<f32, u32> {
+pub fn make_moons(num_samples: usize, noise: f32) -> SmartCoreResult<Dataset<f32, u32>> {
     let num_samples_out = num_samples / 2;
     let num_samples_in = num_samples - num_samples_out;
 
     let linspace_out = linspace(0.0, std::f32::consts::PI, num_samples_out);
     let linspace_in = linspace(0.0, std::f32::consts::PI, num_samples_in);
 
-    let noise = Normal::new(0.0, noise).unwrap();
+    let noise = Normal::new(0.0, noise).map_err(|err| {
+        Failed::invalid_state(&format!(
+            "Failed to create normal distribution for moon noise: {err}"
+        ))
+    })?;
     let mut rng = rand::thread_rng();
 
     let mut x: Vec<f32> = Vec::with_capacity(num_samples * 2);
@@ -114,7 +131,7 @@ pub fn make_moons(num_samples: usize, noise: f32) -> Dataset<f32, u32> {
         y.push(1.0);
     }
 
-    Dataset {
+    Ok(Dataset {
         data: x,
         target: y.into_iter().map(|x| x as u32).collect(),
         num_samples,
@@ -122,7 +139,7 @@ pub fn make_moons(num_samples: usize, noise: f32) -> Dataset<f32, u32> {
         feature_names: (0..2).map(|n| n.to_string()).collect(),
         target_names: vec!["label".to_string()],
         description: "Two interleaving half circles in 2d".to_string(),
-    }
+    })
 }
 
 fn linspace(start: f32, stop: f32, num: usize) -> Vec<f32> {
@@ -136,14 +153,15 @@ fn linspace(start: f32, stop: f32, num: usize) -> Vec<f32> {
 mod tests {
 
     use super::*;
+    use crate::error::Failed;
 
     #[cfg_attr(
         all(target_arch = "wasm32", not(target_os = "wasi")),
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn test_make_blobs() {
-        let dataset = make_blobs(10, 2, 3);
+    fn test_make_blobs() -> Result<(), Failed> {
+        let dataset = make_blobs(10, 2, 3)?;
         assert_eq!(
             dataset.data.len(),
             dataset.num_features * dataset.num_samples
@@ -151,6 +169,7 @@ mod tests {
         assert_eq!(dataset.target.len(), dataset.num_samples);
         assert_eq!(dataset.num_features, 2);
         assert_eq!(dataset.num_samples, 10);
+        Ok(())
     }
 
     #[cfg_attr(
@@ -158,8 +177,8 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn test_make_circles() {
-        let dataset = make_circles(10, 0.5, 0.05);
+    fn test_make_circles() -> Result<(), Failed> {
+        let dataset = make_circles(10, 0.5, 0.05)?;
         assert_eq!(
             dataset.data.len(),
             dataset.num_features * dataset.num_samples
@@ -167,6 +186,7 @@ mod tests {
         assert_eq!(dataset.target.len(), dataset.num_samples);
         assert_eq!(dataset.num_features, 2);
         assert_eq!(dataset.num_samples, 10);
+        Ok(())
     }
 
     #[cfg_attr(
@@ -174,8 +194,8 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn test_make_moons() {
-        let dataset = make_moons(10, 0.05);
+    fn test_make_moons() -> Result<(), Failed> {
+        let dataset = make_moons(10, 0.05)?;
         assert_eq!(
             dataset.data.len(),
             dataset.num_features * dataset.num_samples
@@ -183,5 +203,6 @@ mod tests {
         assert_eq!(dataset.target.len(), dataset.num_samples);
         assert_eq!(dataset.num_features, 2);
         assert_eq!(dataset.num_samples, 10);
+        Ok(())
     }
 }

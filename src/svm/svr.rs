@@ -596,6 +596,7 @@ impl<T: Clone> Cache<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Failed;
     use crate::linalg::basic::matrix::DenseMatrix;
     use crate::metrics::mean_squared_error;
     use crate::svm::search::svr_params::SVRSearchParameters;
@@ -623,7 +624,7 @@ mod tests {
         wasm_bindgen_test::wasm_bindgen_test
     )]
     #[test]
-    fn svr_fit_predict() {
+    fn svr_fit_predict() -> Result<(), Failed> {
         let x = DenseMatrix::from_2d_array(&[
             &[234.289, 235.6, 159.0, 107.608, 1947., 60.323],
             &[259.426, 232.5, 145.6, 108.632, 1948., 61.122],
@@ -661,9 +662,10 @@ mod tests {
         .and_then(|lr| lr.predict(&x))
         .unwrap();
 
-        let t = mean_squared_error(&y_hat, &y);
+        let t = mean_squared_error(&y_hat, &y)?;
         println!("{t:?}");
         assert!(t < 2.5);
+        Ok(())
     }
 
     #[cfg_attr(
