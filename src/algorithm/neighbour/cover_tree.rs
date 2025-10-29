@@ -95,7 +95,7 @@ impl<T: Debug + PartialEq, D: Distance<T>> CoverTree<T, D> {
             identical_excluded: false,
         };
 
-        tree.build_cover_tree();
+        tree.build_cover_tree()?;
 
         Ok(tree)
     }
@@ -249,7 +249,7 @@ impl<T: Debug + PartialEq, D: Distance<T>> CoverTree<T, D> {
         }
     }
 
-    fn build_cover_tree(&mut self) {
+    fn build_cover_tree(&mut self) -> Result<(), Failed> {
         let mut point_set: Vec<DistanceSet> = Vec::new();
         let mut consumed_set: Vec<DistanceSet> = Vec::new();
 
@@ -269,6 +269,12 @@ impl<T: Debug + PartialEq, D: Distance<T>> CoverTree<T, D> {
             }
         }
 
+        if self.data.len() > 1 && max_dist <= f64::EPSILON {
+            return Err(Failed::fit(
+                "Training points are identical; cannot build cover tree",
+            ));
+        }
+
         self.root = self.batch_insert(
             idx,
             self.get_scale(max_dist),
@@ -276,6 +282,8 @@ impl<T: Debug + PartialEq, D: Distance<T>> CoverTree<T, D> {
             &mut point_set,
             &mut consumed_set,
         );
+
+        Ok(())
     }
 
     fn batch_insert(
@@ -290,7 +298,12 @@ impl<T: Debug + PartialEq, D: Distance<T>> CoverTree<T, D> {
             self.new_leaf(p)
         } else {
             let max_dist = self.max(point_set);
-            let next_scale = (max_scale - 1).min(self.get_scale(max_dist));
+            let scale_from_points = self.get_scale(max_dist);
+            let next_scale = if max_scale == i64::MIN {
+                scale_from_points
+            } else {
+                (max_scale - 1).min(scale_from_points)
+            };
             if next_scale == i64::MIN {
                 let mut children: Vec<Node> = Vec::new();
                 let mut leaf = self.new_leaf(p);
@@ -509,6 +522,14 @@ mod tests {
         let knn: Vec<usize> = knn.iter().map(|v| v.0).collect();
 
         assert_eq!(vec!(0, 1, 2), knn);
+    }
+
+    #[test]
+    fn identical_points_return_error() {
+        let data = vec![vec![1.0_f64, 1.0_f64]; 4];
+        let err = CoverTree::new(data, Distances::euclidian()).unwrap_err();
+        assert_eq!(err.error(), FailedError::FitFailed);
+        assert!(err.to_string().contains("Training points are identical"));
     }
     #[cfg_attr(
         all(target_arch = "wasm32", not(target_os = "wasi")),
