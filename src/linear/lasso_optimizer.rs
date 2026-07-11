@@ -14,7 +14,12 @@
 use crate::error::Failed;
 use crate::linalg::basic::arrays::{Array1, Array2, ArrayView1, MutArray, MutArrayView1};
 use crate::linear::bg_solver::BiconjugateGradientSolver;
+use crate::linear::optimization_control::{check_control, OptimizationControl};
 use crate::numbers::floatnum::FloatNumber;
+
+const MAX_LINE_SEARCH_ITERATIONS: usize = 100;
+const LASSO_LINE_SEARCH_EXCEEDED: &str = "Lasso line search exceeded its fixed iteration bound";
+const PCG_MAX_ITERATIONS: usize = 5000;
 
 /// Interior Point Optimizer
 pub struct InteriorPointOptimizer<T: FloatNumber, X: Array2<T>> {
@@ -46,13 +51,26 @@ impl<T: FloatNumber, X: Array2<T>> InteriorPointOptimizer<T, X> {
         max_iter: usize,
         tol: T,
     ) -> Result<Vec<T>, Failed> {
+        let never_stop = || false;
+        self.optimize_with_control(x, y, lambda, max_iter, tol, &never_stop)
+    }
+
+    /// Run the optimization while cooperatively polling cancellation or a deadline.
+    pub fn optimize_with_control<C: OptimizationControl + ?Sized>(
+        &mut self,
+        x: &X,
+        y: &Vec<T>,
+        lambda: T,
+        max_iter: usize,
+        tol: T,
+        control: &C,
+    ) -> Result<Vec<T>, Failed> {
         let (n, p) = x.shape();
         let p_f64 = T::from_usize(p).unwrap();
 
         let lambda = lambda.max(T::epsilon());
 
         //parameters
-        let pcgmaxi = 5000;
         let min_pcgtol = T::from_f64(0.1).unwrap();
         let eta = T::from_f64(1E-3).unwrap();
         let alpha = T::from_f64(0.01).unwrap();
@@ -63,7 +81,6 @@ impl<T: FloatNumber, X: Array2<T>> InteriorPointOptimizer<T, X> {
         // let y = M::from_row_vector(y.sub_scalar(y.mean_by())).transpose();
         let y = y.sub_scalar(T::from_f64(y.mean_by()).unwrap());
 
-        let mut max_ls_iter = 100;
         let mut pitr = 0;
         let mut w = Vec::zeros(p);
         let mut neww = w.clone();
@@ -91,6 +108,7 @@ impl<T: FloatNumber, X: Array2<T>> InteriorPointOptimizer<T, X> {
         let lambda_f64 = lambda.to_f64().unwrap();
 
         for ntiter in 0..max_iter {
+            check_control(control)?;
             let mut z = w.xa(true, x);
 
             for i in 0..n {
@@ -152,9 +170,16 @@ impl<T: FloatNumber, X: Array2<T>> InteriorPointOptimizer<T, X> {
                 pcgtol *= min_pcgtol;
             }
 
-            let error = self.solve_mut(x, &grad, &mut dxu, pcgtol, pcgmaxi)?;
+            let error = self.solve_mut_with_control(
+                x,
+                &grad,
+                &mut dxu,
+                pcgtol,
+                PCG_MAX_ITERATIONS,
+                control,
+            )?;
             if error > pcgtol {
-                pitr = pcgmaxi;
+                pitr = PCG_MAX_ITERATIONS;
             }
 
             dx[..p].copy_from_slice(&dxu[..p]);
@@ -162,14 +187,12 @@ impl<T: FloatNumber, X: Array2<T>> InteriorPointOptimizer<T, X> {
 
             // BACKTRACKING LINE SEARCH
             let phi = z.dot(&z) + lambda * u.sum() - Self::sumlogneg(&f) / t;
-            s = T::one();
             let gdx = grad.dot(&dxu);
 
-            let lsiter = 0;
-            while lsiter < max_ls_iter {
+            s = Self::bounded_line_search(T::one(), beta, control, |step| {
                 for i in 0..p {
-                    neww[i] = w[i] + s * dx[i];
-                    newu[i] = u[i] + s * du[i];
+                    neww[i] = w[i] + step * dx[i];
+                    newu[i] = u[i] + step * du[i];
                     newf.set((i, 0), neww[i] - newu[i]);
                     newf.set((i, 1), -neww[i] - newu[i]);
                 }
@@ -185,19 +208,10 @@ impl<T: FloatNumber, X: Array2<T>> InteriorPointOptimizer<T, X> {
                     }
 
                     let newphi = newz.dot(&newz) + lambda * newu.sum() - Self::sumlogneg(&newf) / t;
-                    if newphi - phi <= alpha * s * gdx {
-                        break;
-                    }
+                    return newphi - phi <= alpha * step * gdx;
                 }
-                s = beta * s;
-                max_ls_iter += 1;
-            }
-
-            if lsiter == max_ls_iter {
-                return Err(Failed::fit(
-                    "Exceeded maximum number of iteration for interior point optimizer",
-                ));
-            }
+                false
+            })?;
 
             w.copy_from(&neww);
             u.copy_from(&newu);
@@ -205,6 +219,28 @@ impl<T: FloatNumber, X: Array2<T>> InteriorPointOptimizer<T, X> {
         }
 
         Ok(w)
+    }
+
+    fn bounded_line_search<C, F>(
+        initial_step: T,
+        beta: T,
+        control: &C,
+        mut accepts: F,
+    ) -> Result<T, Failed>
+    where
+        C: OptimizationControl + ?Sized,
+        F: FnMut(T) -> bool,
+    {
+        let mut step = initial_step;
+        for _ in 0..MAX_LINE_SEARCH_ITERATIONS {
+            check_control(control)?;
+            if accepts(step) {
+                return Ok(step);
+            }
+            step = beta * step;
+        }
+
+        Err(Failed::fit(LASSO_LINE_SEARCH_EXCEEDED))
     }
 
     fn sumlogneg(f: &X) -> T {
@@ -243,5 +279,63 @@ impl<'a, T: FloatNumber, X: Array2<T>> BiconjugateGradientSolver<'a, T, X>
 
     fn mat_t_vec_mul(&self, a: &X, x: &Vec<T>, y: &mut Vec<T>) {
         self.mat_vec_mul(a, x, y);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::linalg::basic::matrix::DenseMatrix;
+    use crate::linear::optimization_control::OPTIMIZATION_INTERRUPTED;
+    use std::cell::Cell;
+
+    #[test]
+    fn line_search_stops_at_its_fixed_bound() {
+        let evaluations = Cell::new(0);
+        let control = || false;
+
+        let result = InteriorPointOptimizer::<f64, DenseMatrix<f64>>::bounded_line_search(
+            1.0,
+            0.5,
+            &control,
+            |_| {
+                evaluations.set(evaluations.get() + 1);
+                false
+            },
+        );
+
+        assert_eq!(evaluations.get(), MAX_LINE_SEARCH_ITERATIONS);
+        assert_eq!(result.unwrap_err(), Failed::fit(LASSO_LINE_SEARCH_EXCEEDED));
+    }
+
+    #[test]
+    fn line_search_polls_optimization_control() {
+        let evaluations = Cell::new(0);
+        let control = || true;
+
+        let result = InteriorPointOptimizer::<f64, DenseMatrix<f64>>::bounded_line_search(
+            1.0,
+            0.5,
+            &control,
+            |_| {
+                evaluations.set(evaluations.get() + 1);
+                false
+            },
+        );
+
+        assert_eq!(evaluations.get(), 0);
+        assert_eq!(result.unwrap_err(), Failed::fit(OPTIMIZATION_INTERRUPTED));
+    }
+
+    #[test]
+    fn outer_iteration_polls_optimization_control() {
+        let x = DenseMatrix::from_2d_array(&[&[1.0], &[2.0], &[3.0]]).unwrap();
+        let y = vec![1.0, 2.0, 3.0];
+        let mut optimizer = InteriorPointOptimizer::new(&x, 1);
+        let control = || true;
+
+        let result = optimizer.optimize_with_control(&x, &y, 0.1, 10, 1e-4, &control);
+
+        assert_eq!(result.unwrap_err(), Failed::fit(OPTIMIZATION_INTERRUPTED));
     }
 }

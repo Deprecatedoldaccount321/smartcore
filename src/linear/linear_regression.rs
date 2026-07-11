@@ -247,20 +247,41 @@ impl<
         y: &Y,
         parameters: LinearRegressionParameters,
     ) -> Result<LinearRegression<TX, TY, X, Y>, Failed> {
-        let b = X::from_iterator(
-            y.iterator(0).map(|&v| TX::from(v).unwrap()),
-            y.shape(),
-            1,
-            0,
-        );
-        let (x_nrows, num_attributes) = x.shape();
-        let (y_nrows, _) = b.shape();
+        let mut models = Self::fit_multi_target(x, std::slice::from_ref(y), parameters)?;
+        Ok(models.remove(0))
+    }
 
-        if x_nrows != y_nrows {
+    /// Fits multiple target vectors with one matrix decomposition and solve.
+    ///
+    /// Each returned model is equivalent to fitting the corresponding target
+    /// independently, in the same order as `targets`.
+    pub fn fit_multi_target(
+        x: &X,
+        targets: &[Y],
+        parameters: LinearRegressionParameters,
+    ) -> Result<Vec<LinearRegression<TX, TY, X, Y>>, Failed> {
+        if targets.is_empty() {
+            return Err(Failed::fit("At least one target is required"));
+        }
+
+        let (x_nrows, num_attributes) = x.shape();
+        if targets.iter().any(|target| target.shape() != x_nrows) {
             return Err(Failed::fit(
                 "Number of rows of X doesn\'t match number of rows of Y",
             ));
         }
+
+        let target_count = targets.len();
+        let b = X::from_iterator(
+            (0..x_nrows).flat_map(|row| {
+                targets
+                    .iter()
+                    .map(move |target| TX::from(*target.get(row)).unwrap())
+            }),
+            x_nrows,
+            target_count,
+            0,
+        );
 
         let a = x.h_stack(&X::ones(x_nrows, 1));
 
@@ -269,14 +290,21 @@ impl<
             LinearRegressionSolverName::SVD => a.svd_solve_mut(b)?,
         };
 
-        let weights = X::from_slice(w.slice(0..num_attributes, 0..1).as_ref());
+        let mut models = Vec::with_capacity(target_count);
+        for target_index in 0..target_count {
+            let weights = X::from_slice(
+                w.slice(0..num_attributes, target_index..target_index + 1)
+                    .as_ref(),
+            );
+            models.push(LinearRegression {
+                intercept: Some(*w.get((num_attributes, target_index))),
+                coefficients: Some(weights),
+                _phantom_ty: PhantomData,
+                _phantom_y: PhantomData,
+            });
+        }
 
-        Ok(LinearRegression {
-            intercept: Some(*w.get((num_attributes, 0))),
-            coefficients: Some(weights),
-            _phantom_ty: PhantomData,
-            _phantom_y: PhantomData,
-        })
+        Ok(models)
     }
 
     /// Predict target values from `x`

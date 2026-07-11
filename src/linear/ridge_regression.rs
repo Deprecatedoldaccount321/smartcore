@@ -291,6 +291,19 @@ impl<
         y: &Y,
         parameters: RidgeRegressionParameters<TX>,
     ) -> Result<RidgeRegression<TX, TY, X, Y>, Failed> {
+        let mut models = Self::fit_multi_target(x, std::slice::from_ref(y), parameters)?;
+        Ok(models.remove(0))
+    }
+
+    /// Fits multiple target vectors with one matrix decomposition and solve.
+    ///
+    /// Each returned model is equivalent to fitting the corresponding target
+    /// independently, in the same order as `targets`.
+    pub fn fit_multi_target(
+        x: &X,
+        targets: &[Y],
+        parameters: RidgeRegressionParameters<TX>,
+    ) -> Result<Vec<RidgeRegression<TX, TY, X, Y>>, Failed> {
         //w = inv(X^t X + alpha*Id) * X.T y
 
         let (n, p) = x.shape();
@@ -301,21 +314,30 @@ impl<
             ));
         }
 
-        if y.shape() != n {
+        if targets.is_empty() {
+            return Err(Failed::fit("At least one target is required"));
+        }
+
+        if targets.iter().any(|target| target.shape() != n) {
             return Err(Failed::fit("Number of rows in X should = len(y)"));
         }
 
-        let y_column = X::from_iterator(
-            y.iterator(0).map(|&v| TX::from(v).unwrap()),
-            y.shape(),
-            1,
+        let target_count = targets.len();
+        let target_matrix = X::from_iterator(
+            (0..n).flat_map(|row| {
+                targets
+                    .iter()
+                    .map(move |target| TX::from(*target.get(row)).unwrap())
+            }),
+            n,
+            target_count,
             0,
         );
 
-        let (w, b) = if parameters.normalize {
+        let (w, intercepts) = if parameters.normalize {
             let (scaled_x, col_mean, col_std) = Self::rescale_x(x)?;
             let x_t = scaled_x.transpose();
-            let x_t_y = x_t.matmul(&y_column);
+            let x_t_y = x_t.matmul(&target_matrix);
             let mut x_t_x = x_t.matmul(&scaled_x);
 
             for i in 0..p {
@@ -328,21 +350,31 @@ impl<
             };
 
             for (i, col_std_i) in col_std.iter().enumerate().take(p) {
-                w.set((i, 0), *w.get((i, 0)) / *col_std_i);
+                for target_index in 0..target_count {
+                    w.set(
+                        (i, target_index),
+                        *w.get((i, target_index)) / *col_std_i,
+                    );
+                }
             }
 
-            let mut b = TX::zero();
+            let intercepts = targets
+                .iter()
+                .enumerate()
+                .map(|(target_index, target)| {
+                    let mut weighted_mean = TX::zero();
+                    for (i, col_mean_i) in col_mean.iter().enumerate().take(p) {
+                        weighted_mean += *w.get((i, target_index)) * *col_mean_i;
+                    }
 
-            for (i, col_mean_i) in col_mean.iter().enumerate().take(p) {
-                b += *w.get((i, 0)) * *col_mean_i;
-            }
+                    TX::from_f64(target.mean_by()).unwrap() - weighted_mean
+                })
+                .collect();
 
-            let b = TX::from_f64(y.mean_by()).unwrap() - b;
-
-            (w, b)
+            (w, intercepts)
         } else {
             let x_t = x.transpose();
-            let x_t_y = x_t.matmul(&y_column);
+            let x_t_y = x_t.matmul(&target_matrix);
             let mut x_t_x = x_t.matmul(x);
 
             for i in 0..p {
@@ -354,15 +386,22 @@ impl<
                 RidgeRegressionSolverName::SVD => x_t_x.svd_solve_mut(x_t_y)?,
             };
 
-            (w, TX::zero())
+            (w, vec![TX::zero(); target_count])
         };
 
-        Ok(RidgeRegression {
-            intercept: Some(b),
-            coefficients: Some(w),
-            _phantom_ty: PhantomData,
-            _phantom_y: PhantomData,
-        })
+        let mut models = Vec::with_capacity(target_count);
+        for (target_index, intercept) in intercepts.into_iter().enumerate() {
+            let coefficients =
+                X::from_slice(w.slice(0..p, target_index..target_index + 1).as_ref());
+            models.push(RidgeRegression {
+                intercept: Some(intercept),
+                coefficients: Some(coefficients),
+                _phantom_ty: PhantomData,
+                _phantom_y: PhantomData,
+            });
+        }
+
+        Ok(models)
     }
 
     fn rescale_x(x: &X) -> Result<(X, Vec<TX>, Vec<TX>), Failed> {

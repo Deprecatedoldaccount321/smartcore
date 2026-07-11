@@ -32,6 +32,7 @@ use crate::api::{Predictor, SupervisedEstimator};
 use crate::error::Failed;
 use crate::linalg::basic::arrays::{Array1, Array2, ArrayView1};
 use crate::linear::lasso_optimizer::InteriorPointOptimizer;
+use crate::linear::optimization_control::{check_control, OptimizationControl};
 use crate::numbers::basenum::Number;
 use crate::numbers::floatnum::FloatNumber;
 use crate::numbers::realnum::RealNumber;
@@ -244,6 +245,50 @@ impl<TX: FloatNumber + RealNumber, TY: Number, X: Array2<TX>, Y: Array1<TY>> Las
     /// * `y` - target values
     /// * `parameters` - other parameters, use `Default::default()` to set parameters to default values.
     pub fn fit(x: &X, y: &Y, parameters: LassoParameters) -> Result<Lasso<TX, TY, X, Y>, Failed> {
+        let never_stop = || false;
+        Self::fit_with_control(x, y, parameters, &never_stop)
+    }
+
+    /// Fits Lasso regression while cooperatively polling cancellation or a deadline.
+    ///
+    /// `control` is polled during outer iterations, line search, and the
+    /// biconjugate-gradient solve. A closure can check an atomic cancellation
+    /// flag, a deadline, or both.
+    pub fn fit_with_control<C: OptimizationControl + ?Sized>(
+        x: &X,
+        y: &Y,
+        parameters: LassoParameters,
+        control: &C,
+    ) -> Result<Lasso<TX, TY, X, Y>, Failed> {
+        let mut models = Self::fit_multi_target_with_control(
+            x,
+            std::slice::from_ref(y),
+            parameters,
+            control,
+        )?;
+        Ok(models.remove(0))
+    }
+
+    /// Fits multiple Lasso targets while reusing target-independent optimizer state.
+    ///
+    /// Each target has an independent objective and produces an ordinary Lasso
+    /// model in the same order as `targets`.
+    pub fn fit_multi_target(
+        x: &X,
+        targets: &[Y],
+        parameters: LassoParameters,
+    ) -> Result<Vec<Lasso<TX, TY, X, Y>>, Failed> {
+        let never_stop = || false;
+        Self::fit_multi_target_with_control(x, targets, parameters, &never_stop)
+    }
+
+    /// Fits multiple Lasso targets with shared optimizer state and cooperative control.
+    pub fn fit_multi_target_with_control<C: OptimizationControl + ?Sized>(
+        x: &X,
+        targets: &[Y],
+        parameters: LassoParameters,
+        control: &C,
+    ) -> Result<Vec<Lasso<TX, TY, X, Y>>, Failed> {
         let (n, p) = x.shape();
 
         if n <= p {
@@ -264,59 +309,83 @@ impl<TX: FloatNumber + RealNumber, TY: Number, X: Array2<TX>, Y: Array1<TY>> Las
             return Err(Failed::fit("max_iter should be > 0"));
         }
 
-        if y.shape() != n {
+        if targets.is_empty() {
+            return Err(Failed::fit("At least one target is required"));
+        }
+
+        if targets.iter().any(|target| target.shape() != n) {
             return Err(Failed::fit("Number of rows in X should = len(y)"));
         }
 
-        let y: Vec<TX> = y.iterator(0).map(|&v| TX::from(v).unwrap()).collect();
+        check_control(control)?;
 
         let l1_reg = TX::from_f64(parameters.alpha * n as f64).unwrap();
+        let tol = TX::from_f64(parameters.tol).unwrap();
+        let mut models = Vec::with_capacity(targets.len());
 
-        let (w, b) = if parameters.normalize {
+        if parameters.normalize {
             let (scaled_x, col_mean, col_std) = Self::rescale_x(x)?;
-
             let mut optimizer = InteriorPointOptimizer::new(&scaled_x, p);
 
-            let mut w = optimizer.optimize(
-                &scaled_x,
-                &y,
-                l1_reg,
-                parameters.max_iter,
-                TX::from_f64(parameters.tol).unwrap(),
-            )?;
+            for target in targets {
+                check_control(control)?;
+                let y: Vec<TX> = target
+                    .iterator(0)
+                    .map(|&value| TX::from(value).unwrap())
+                    .collect();
+                let mut w = optimizer.optimize_with_control(
+                    &scaled_x,
+                    &y,
+                    l1_reg,
+                    parameters.max_iter,
+                    tol,
+                    control,
+                )?;
 
-            for (j, col_std_j) in col_std.iter().enumerate().take(p) {
-                w[j] /= *col_std_j;
+                for (j, col_std_j) in col_std.iter().enumerate().take(p) {
+                    w[j] /= *col_std_j;
+                }
+
+                let mut weighted_mean = TX::zero();
+                for (i, col_mean_i) in col_mean.iter().enumerate().take(p) {
+                    weighted_mean += w[i] * *col_mean_i;
+                }
+
+                models.push(Lasso {
+                    intercept: Some(TX::from_f64(y.mean_by()).unwrap() - weighted_mean),
+                    coefficients: Some(X::from_column(&w)),
+                    _phantom_ty: PhantomData,
+                    _phantom_y: PhantomData,
+                });
             }
-
-            let mut b = TX::zero();
-
-            for (i, col_mean_i) in col_mean.iter().enumerate().take(p) {
-                b += w[i] * *col_mean_i;
-            }
-
-            b = TX::from_f64(y.mean_by()).unwrap() - b;
-            (X::from_column(&w), b)
         } else {
             let mut optimizer = InteriorPointOptimizer::new(x, p);
 
-            let w = optimizer.optimize(
-                x,
-                &y,
-                l1_reg,
-                parameters.max_iter,
-                TX::from_f64(parameters.tol).unwrap(),
-            )?;
+            for target in targets {
+                check_control(control)?;
+                let y: Vec<TX> = target
+                    .iterator(0)
+                    .map(|&value| TX::from(value).unwrap())
+                    .collect();
+                let w = optimizer.optimize_with_control(
+                    x,
+                    &y,
+                    l1_reg,
+                    parameters.max_iter,
+                    tol,
+                    control,
+                )?;
 
-            (X::from_column(&w), TX::from_f64(y.mean_by()).unwrap())
-        };
+                models.push(Lasso {
+                    intercept: Some(TX::from_f64(y.mean_by()).unwrap()),
+                    coefficients: Some(X::from_column(&w)),
+                    _phantom_ty: PhantomData,
+                    _phantom_y: PhantomData,
+                });
+            }
+        }
 
-        Ok(Lasso {
-            intercept: Some(b),
-            coefficients: Some(w),
-            _phantom_ty: PhantomData,
-            _phantom_y: PhantomData,
-        })
+        Ok(models)
     }
 
     /// Predict target values from `x`

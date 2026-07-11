@@ -26,4 +26,5 @@ pub mod lasso;
 pub mod lasso_optimizer;
 pub mod linear_regression;
 pub mod logistic_regression;
+pub mod optimization_control;
 pub mod ridge_regression;

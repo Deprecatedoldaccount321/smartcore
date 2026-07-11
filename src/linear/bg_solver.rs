@@ -25,6 +25,7 @@
 //! and [this paper](https://www.cs.cmu.edu/~quake-papers/painless-conjugate-gradient.pdf)
 use crate::error::Failed;
 use crate::linalg::basic::arrays::{Array, Array1, Array2, ArrayView1, MutArrayView1};
+use crate::linear::optimization_control::{check_control, OptimizationControl};
 use crate::numbers::floatnum::FloatNumber;
 
 /// Trait for Biconjugate Gradient Solver
@@ -38,6 +39,20 @@ pub trait BiconjugateGradientSolver<'a, T: FloatNumber, X: Array2<T>> {
         tol: T,
         max_iter: usize,
     ) -> Result<T, Failed> {
+        let never_stop = || false;
+        self.solve_mut_with_control(a, b, x, tol, max_iter, &never_stop)
+    }
+
+    /// Solve Ax = b while cooperatively polling cancellation or a deadline.
+    fn solve_mut_with_control<C: OptimizationControl + ?Sized>(
+        &self,
+        a: &'a X,
+        b: &Vec<T>,
+        x: &mut Vec<T>,
+        tol: T,
+        max_iter: usize,
+        control: &C,
+    ) -> Result<T, Failed> {
         if tol <= T::zero() {
             return Err(Failed::fit("tolerance shoud be > 0"));
         }
@@ -45,6 +60,8 @@ pub trait BiconjugateGradientSolver<'a, T: FloatNumber, X: Array2<T>> {
         if max_iter == 0 {
             return Err(Failed::fit("maximum number of iterations should be > 0"));
         }
+
+        check_control(control)?;
 
         let n = b.shape();
 
@@ -54,6 +71,7 @@ pub trait BiconjugateGradientSolver<'a, T: FloatNumber, X: Array2<T>> {
         let mut zz = Vec::zeros(n);
 
         self.mat_vec_mul(a, x, &mut r);
+        check_control(control)?;
 
         for j in 0..n {
             r[j] = b[j] - r[j];
@@ -69,6 +87,7 @@ pub trait BiconjugateGradientSolver<'a, T: FloatNumber, X: Array2<T>> {
         let mut err = T::zero();
 
         for iter in 1..max_iter {
+            check_control(control)?;
             let mut bknum = T::zero();
 
             self.solve_preconditioner(a, &rr, &mut zz);
@@ -86,12 +105,14 @@ pub trait BiconjugateGradientSolver<'a, T: FloatNumber, X: Array2<T>> {
                 }
             }
             bkden = bknum;
+            check_control(control)?;
             self.mat_vec_mul(a, &p, &mut z);
             let mut akden = T::zero();
             for j in 0..n {
                 akden += z[j] * pp[j];
             }
             let ak = bknum / akden;
+            check_control(control)?;
             self.mat_t_vec_mul(a, &pp, &mut zz);
             for j in 0..n {
                 x[j] += ak * p[j];
@@ -150,8 +171,11 @@ pub trait BiconjugateGradientSolver<'a, T: FloatNumber, X: Array2<T>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Failed;
     use crate::linalg::basic::arrays::Array2;
     use crate::linalg::basic::matrix::DenseMatrix;
+    use crate::linear::optimization_control::OPTIMIZATION_INTERRUPTED;
+    use std::cell::Cell;
 
     pub struct BGSolver {}
 
@@ -175,5 +199,25 @@ mod tests {
             .zip(expected.iter())
             .all(|(&a, &b)| (a - b).abs() < 1e-4));
         assert!((err - 0.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn bg_solver_polls_optimization_control() {
+        let a = DenseMatrix::from_2d_array(&[&[4.0, 1.0], &[1.0, 3.0]]).unwrap();
+        let b = vec![1.0, 2.0];
+        let mut x = Vec::zeros(2);
+        let polls = Cell::new(0);
+        let control = || {
+            polls.set(polls.get() + 1);
+            polls.get() == 2
+        };
+        let solver = BGSolver {};
+
+        let error = solver
+            .solve_mut_with_control(&a, &b, &mut x, 1e-6, 10, &control)
+            .unwrap_err();
+
+        assert_eq!(error, Failed::fit(OPTIMIZATION_INTERRUPTED));
+        assert_eq!(polls.get(), 2);
     }
 }
